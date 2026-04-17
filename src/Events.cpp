@@ -112,19 +112,20 @@ namespace PluginLogic {
     }
 
     // O CÉREBRO DA MÁQUINA DE ESTADOS
-    bool KeyManager::IsConditionMet(uint32_t keyCode, ActionState requiredState, int requiredTapCount, std::chrono::steady_clock::time_point now, float tapWindow, float holdDuration) {
+    bool KeyManager::IsConditionMet(uint32_t keyCode, ActionState requiredState, int requiredTapCount, std::chrono::steady_clock::time_point now, float tapWindow, float holdDuration, bool isModifier) {
         if (keyCode == 0 || requiredState == ActionState::kIgnored) return true;
 
         auto& state = _keyStates[keyCode];
 
         switch (requiredState) {
         case ActionState::kPress:
+            if (isModifier) return state.isDown;
             return state.isDown && !state.isPressFired;
+
         case ActionState::kTap: {
             if (state.isDown) return false;
             if (std::chrono::duration<float>(now - state.lastUpTime).count() > tapWindow) return false;
-            if (std::chrono::duration<float>(now - state.lastDownTime).count() >= holdDuration) return false;
-            // Conta os taps válidos que ocorreram DENTRO da janela de tempo
+            if (std::chrono::duration<float>(state.lastUpTime - state.lastDownTime).count() >= holdDuration) return false;
             int validTaps = 0;
             for (auto it = state.tapHistory.rbegin(); it != state.tapHistory.rend(); ++it) {
                 if (std::chrono::duration<float>(now - *it).count() <= tapWindow) {
@@ -138,6 +139,8 @@ namespace PluginLogic {
         }
 
         case ActionState::kHold:
+            if (isModifier) return state.isDown && (std::chrono::duration<float>(now - state.lastDownTime).count() >= holdDuration);
+
             return state.isDown && !state.isHeldFired &&
                 (std::chrono::duration<float>(now - state.lastDownTime).count() >= holdDuration);
         }
@@ -212,6 +215,30 @@ namespace PluginLogic {
                                 std::string msg = "Motion triggered: " + std::string(motionEntry.name);
                                 logger::info("[SUCCESS] {}", msg);
                                 RE::SendHUDMessage::ShowHUDMessage(msg.c_str());
+                            }
+                            auto player = RE::PlayerCharacter::GetSingleton();
+                            if (player) {
+                                player->SetGraphVariableInt("MotionInputCMF", static_cast<int>(m));
+                                player->SetGraphVariableBool("BFCO_Is0GravityAttck", true);
+                                if (auto charController = player->GetCharController()) {
+                                    // Zera a gravidade do jogador
+                                    charController->gravity = 0.0f;
+
+                                    // Zera o tempo de queda para evitar dano de queda acumulado quando a gravidade voltar
+                                    charController->fallTime = 0.0f;
+
+                                    charController->outVelocity.quad.m128_f32[2] = 0.0f;
+                                    charController->initialVelocity.quad.m128_f32[2] = 0.0f;
+                                    charController->velocityMod.quad.m128_f32[2] = 0.0f;
+                                    charController->direction.quad.m128_f32[2] = 0.0f;
+
+                                    // Recupera a velocidade linear atual do corpo rígido (RigidBody) na engine e anula o eixo Z
+                                    RE::hkVector4 linearVel;
+                                    charController->GetLinearVelocityImpl(linearVel);
+                                    linearVel.quad.m128_f32[2] = 0.0f;
+                                    charController->SetLinearVelocityImpl(linearVel);
+                                }
+                                player->NotifyAnimationGraph("BFCO_0GravityStart");
                             }
                             InputManagerAPI::SendMotionTriggeredEvent(static_cast<int>(m), motionEntry.name);
                         }
@@ -481,27 +508,60 @@ namespace PluginLogic {
 
                     if (binding.combo.mainKey == id || binding.combo.modifierKey == id) {
 
-                        // Verifica as condições bases de Tap, Hold, etc
-                        if (IsConditionMet(binding.combo.mainKey, binding.combo.mainActionType, binding.combo.mainTapCount, now, binding.combo.tapWindow, binding.combo.holdDuration) &&
-                            IsConditionMet(binding.combo.modifierKey, binding.combo.modifierActionType, binding.combo.modTapCount, now, binding.combo.tapWindow, binding.combo.holdDuration)) {
+                        // Define quem atua como Gatilho (Trava ativada) e quem atua como Âncora (Trava ignorada)
+                        bool mainIsAnchor = false;
+                        bool modIsAnchor = false;
 
-                            // LÓGICA DE DELAY PARA TAP ÚNICO CONFLITANTE
-                            if (binding.combo.mainActionType == ActionState::kTap && binding.combo.mainTapCount == 1 && binding.combo.needsDelay) {
-                                
-                                // Em vez de disparar agora, criamos uma mini-thread que espera o TapWindow passar
+                        if (binding.combo.modifierKey != 0) {
+                            if (binding.combo.modifierActionType == ActionState::kTap) {
+                                // Se o Modificador é Tap, ele é o Gatilho. A Tecla Principal é a Âncora.
+                                mainIsAnchor = true;
+                                modIsAnchor = false;
+                            }
+                            else if (binding.combo.mainActionType == ActionState::kTap) {
+                                // Se a Tecla Principal é Tap, ela é o Gatilho. O Modificador é a Âncora.
+                                mainIsAnchor = false;
+                                modIsAnchor = true;
+                            }
+                            else {
+                                // Se nenhum for Tap (ex: Hold+Press), o Modificador atua como âncora tradicional.
+                                mainIsAnchor = false;
+                                modIsAnchor = true;
+                            }
+                        }
+
+                        // Verifica as condições bases de Tap, Hold, etc, respeitando as âncoras reais
+                        if (IsConditionMet(binding.combo.mainKey, binding.combo.mainActionType, binding.combo.mainTapCount, now, binding.combo.tapWindow, binding.combo.holdDuration, mainIsAnchor) &&
+                            IsConditionMet(binding.combo.modifierKey, binding.combo.modifierActionType, binding.combo.modTapCount, now, binding.combo.tapWindow, binding.combo.holdDuration, modIsAnchor)) {
+                            // LÓGICA DE DELAY PARA TAP CONFLITANTE
+                            bool isMainTap = (binding.combo.mainActionType == ActionState::kTap);
+                            bool isModTap = (binding.combo.modifierActionType == ActionState::kTap);
+
+                            // 1. Trava os disparos repetidos instantaneamente para o frame atual não reavaliar
+                            if (binding.combo.mainActionType == ActionState::kHold) _keyStates[binding.combo.mainKey].isHeldFired = true;
+                            if (binding.combo.modifierActionType == ActionState::kHold) _keyStates[binding.combo.modifierKey].isHeldFired = true;
+                            if (binding.combo.mainActionType == ActionState::kPress) _keyStates[binding.combo.mainKey].isPressFired = true;
+                            if (binding.combo.modifierActionType == ActionState::kPress) _keyStates[binding.combo.modifierKey].isPressFired = true;
+
+                            _keyStates[binding.combo.mainKey].usedAsModifier = true;
+                            if (binding.combo.modifierKey != 0) _keyStates[binding.combo.modifierKey].usedAsModifier = true;
+
+                            consumed = true;
+
+                            if ((isMainTap || isModTap) && binding.combo.needsDelay) {
+
                                 std::string actionName = binding.name;
-                                uint32_t mainK = binding.combo.mainKey;
+                                uint32_t tapKey = isMainTap ? binding.combo.mainKey : binding.combo.modifierKey;
+                                int requiredTaps = isMainTap ? binding.combo.mainTapCount : binding.combo.modTapCount;
                                 float waitTime = binding.combo.tapWindow;
-                                
-                                std::thread([this, actionName, mainK, waitTime]() {
+
+                                std::thread([this, actionName, tapKey, requiredTaps, waitTime]() {
                                     std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(waitTime * 1000)));
 
                                     auto nowWake = std::chrono::steady_clock::now();
                                     int validTaps = 0;
 
-                                    // Conta apenas os taps que aconteceram na janela real de clique duplo
-                                    for (auto it = _keyStates[mainK].tapHistory.rbegin(); it != _keyStates[mainK].tapHistory.rend(); ++it) {
-                                        // Usa 1.5x o waitTime para compensar pequenos atrasos da thread do sistema
+                                    for (auto it = _keyStates[tapKey].tapHistory.rbegin(); it != _keyStates[tapKey].tapHistory.rend(); ++it) {
                                         if (std::chrono::duration<float>(nowWake - *it).count() <= (waitTime * 1.5f)) {
                                             validTaps++;
                                         }
@@ -510,42 +570,51 @@ namespace PluginLogic {
                                         }
                                     }
 
-                                    if (validTaps <= 1 && !_keyStates[mainK].isDown) {
-                                        SKSE::GetTaskInterface()->AddTask([this, actionName, mainK]() {
+                                    // Dispara APENAS se os Taps exatos baterem. 
+                                    if (validTaps == requiredTaps && !_keyStates[tapKey].isDown) {
+                                        SKSE::GetTaskInterface()->AddTask([this, actionName, tapKey]() {
                                             ExecuteCallback(actionName);
+
+                                            //Liga o ActionReleased SOMENTE se a ação realmente disparou no delay
+                                            for (auto& b : _bindings) {
+                                                if (b.name == actionName) {
+                                                    bool needsRelease = (b.combo.mainActionType == ActionState::kHold || b.combo.modifierActionType == ActionState::kHold ||
+                                                        b.combo.mainActionType == ActionState::kPress || b.combo.modifierActionType == ActionState::kPress);
+                                                    if (needsRelease) {
+                                                        // Verifica se a tecla âncora (Hold/Press) ainda está sendo segurada
+                                                        bool anchorIsDown = false;
+                                                        if (b.combo.mainActionType == ActionState::kHold || b.combo.mainActionType == ActionState::kPress) {
+                                                            anchorIsDown = _keyStates[b.combo.mainKey].isDown;
+                                                        }
+                                                        else {
+                                                            anchorIsDown = _keyStates[b.combo.modifierKey].isDown;
+                                                        }
+
+                                                        if (anchorIsDown) {
+                                                            b.activeHold = true; // Ainda segura, aguarda o botão subir
+                                                        }
+                                                        else {
+                                                            ExecuteReleaseCallback(actionName); // Já soltou durante a espera do delay, libera agora
+                                                        }
+                                                    }
+                                                    break;
+                                                }
+                                            }
                                             // Limpa para não disparar múltiplas vezes em sequências rápidas
-                                            _keyStates[mainK].tapHistory.clear();
+                                            _keyStates[tapKey].tapHistory.clear();
                                             });
                                     }
                                     }).detach();
-                                
-                            } else {
-                                // Se for Tap múltiplo, Hold, ou Tap 1 sem conflitos, DISPARA INSTANTANEAMENTE
+                            }
+                            else {
+                                // Se for Tap sem conflitos, Hold, ou Press, DISPARA INSTANTANEAMENTE
                                 ExecuteCallback(binding.name);
-                            }
 
-                            consumed = true;
+                                if (binding.combo.mainActionType == ActionState::kHold || binding.combo.modifierActionType == ActionState::kHold ||
+                                    binding.combo.mainActionType == ActionState::kPress || binding.combo.modifierActionType == ActionState::kPress) {
+                                    binding.activeHold = true;
+                                }
 
-                            if (binding.combo.mainActionType == ActionState::kHold) _keyStates[binding.combo.mainKey].isHeldFired = true;
-                            if (binding.combo.modifierActionType == ActionState::kHold) _keyStates[binding.combo.modifierKey].isHeldFired = true;
-
-                            // <-- ADICIONADO: Trava o Press para não metralhar callbacks todo frame
-                            if (binding.combo.mainActionType == ActionState::kPress) _keyStates[binding.combo.mainKey].isPressFired = true;
-                            if (binding.combo.modifierActionType == ActionState::kPress) _keyStates[binding.combo.modifierKey].isPressFired = true;
-
-                            // <-- ATUALIZADO: Agora tanto Hold quanto Press acionam a escuta do ActionReleased
-                            if (binding.combo.mainActionType == ActionState::kHold || binding.combo.modifierActionType == ActionState::kHold ||
-                                binding.combo.mainActionType == ActionState::kPress || binding.combo.modifierActionType == ActionState::kPress) {
-                                binding.activeHold = true;
-                            }
-                            // Flag de modificador consumido
-                            _keyStates[binding.combo.mainKey].usedAsModifier = true;
-                            if (binding.combo.modifierKey != 0) {
-                                _keyStates[binding.combo.modifierKey].usedAsModifier = true;
-                            }
-
-                            // Limpa o historico se for um disparo instantâneo (ignora no delay para nao apagar os taps da thread)
-                            if (!binding.combo.needsDelay) {
                                 if (binding.combo.mainActionType == ActionState::kTap) _keyStates[binding.combo.mainKey].tapHistory.clear();
                                 if (binding.combo.modifierActionType == ActionState::kTap) _keyStates[binding.combo.modifierKey].tapHistory.clear();
                             }

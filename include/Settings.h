@@ -1781,35 +1781,35 @@ namespace ActionMenuUI {
                 auto CheckComboConflict = [](
                     int aMKey, int aMAct, int aMTap, int aModKey, int aModAct, int aModTap, int aGest,
                     int bMKey, int bMAct, int bMTap, int bModKey, int bModAct, int bModTap, int bGest) {
+
                         if (aMKey == 0 || bMKey == 0) return false;
 
-                        if (aModAct == 0 || aModAct == 3) aModKey = 0;
-                        if (bModAct == 0 || bModAct == 3) bModKey = 0;
+                        struct K { int key; int act; int tap; int gest; };
 
-                        if (aMKey == bMKey && aMAct == bMAct) {
-                            bool mainTapMatch = (aMAct == 1) ? (aMTap == bMTap) : true;
+                        auto make_key = [](int key, int act, int tap, int gest) -> K {
+                            if (act == 0) return { 0, 0, 0, -1 }; // Ignore
+                            int normAct = (act == 4) ? 2 : act; // Normaliza Press (4) para Hold (2)
+                            if (normAct == 3) return { 0, 3, 0, gest }; // Gesto ignora a tecla real na checagem cruzada
+                            return { key, normAct, (normAct == 1) ? tap : 1, -1 };
+                            };
 
-                            if (mainTapMatch) {
-                                if (aModAct == 3 && bModAct == 3) {
-                                    return aGest == bGest;
-                                }
-                                else if (aModAct != 3 && bModAct != 3) {
-                                    bool modTapMatch = (aModAct == 1) ? (aModTap == bModTap) : true;
-                                    return aModKey == bModKey && aModAct == bModAct && modTapMatch;
-                                }
-                            }
-                        }
+                        K a1 = make_key(aMKey, aMAct, aMTap, -1);
+                        K a2 = make_key(aModKey, aModAct, aModTap, aGest);
 
-                        if (aModAct != 3 && bModAct != 3 && aModKey != 0 && bModKey != 0) {
-                            bool crossTapMatch1 = (aMAct == 1) ? (aMTap == bModTap) : true;
-                            bool crossTapMatch2 = (aModAct == 1) ? (aModTap == bMTap) : true;
+                        K b1 = make_key(bMKey, bMAct, bMTap, -1);
+                        K b2 = make_key(bModKey, bModAct, bModTap, bGest);
 
-                            if (aMKey == bModKey && aMAct == bModAct && crossTapMatch1 &&
-                                aModKey == bMKey && aModAct == bMAct && crossTapMatch2) {
-                                return true;
-                            }
-                        }
-                        return false;
+                        auto match = [](K x, K y) {
+                            if (x.act == 0 && y.act == 0) return true;  // Ambos ignorados
+                            if (x.act == 0 || y.act == 0) return false; // Apenas um ignorado
+
+                            if (x.act == 3 && y.act == 3) return x.gest == y.gest; // Gestos
+
+                            return (x.key == y.key) && (x.act == y.act) && (x.tap == y.tap);
+                            };
+
+                        // Avalia Combinação Direta ou Combinação Reversa
+                        return (match(a1, b1) && match(a2, b2)) || (match(a1, b2) && match(a2, b1));
                     };
 
                 // Check PC configuration
@@ -1838,7 +1838,6 @@ namespace ActionMenuUI {
         for (size_t i = 0; i < actionList.size(); ++i) {
             auto& a = actionList[i];
 
-            // Limita o valor customizado ao máximo global
             if (a.useCustomTimings && a.tapWindow > globalTapWindow) {
                 a.tapWindow = globalTapWindow;
             }
@@ -1847,48 +1846,50 @@ namespace ActionMenuUI {
                 if (i == j) continue;
                 auto& b = actionList[j];
 
-                // REGRA 1: HOLD CONFLITANTE COM OUTRA AÇÃO NA MESMA TECLA
-                // (Se houver um Hold na mesma tecla de um Tap, o tempo de Hold precisa ser alto o suficiente)
-                if (a.pcMainKey != 0 && a.pcMainAction == 2 && a.pcModifierKey == 0) { // 2 = Hold
+                // REGRA 1: HOLD/PRESS CONFLITANTE COMO ÂNCORA
+                if (a.pcMainKey != 0 && (a.pcMainAction == 2 || a.pcMainAction == 4) && a.pcModifierKey == 0) {
                     if ((b.pcModifierKey == a.pcMainKey) || (b.pcMainKey == a.pcMainKey && b.pcModifierKey != 0)) {
                         if (a.holdDuration < 1.0f) a.holdDuration = 1.0f;
                     }
                 }
-                if (a.gamepadMainKey != 0 && a.gamepadMainAction == 2 && a.gamepadModifierKey == 0) {
+                if (a.gamepadMainKey != 0 && (a.gamepadMainAction == 2 || a.gamepadMainAction == 4) && a.gamepadModifierKey == 0) {
                     if ((b.gamepadModifierKey == a.gamepadMainKey) || (b.gamepadMainKey == a.gamepadMainKey && b.gamepadModifierKey != 0)) {
                         if (a.holdDuration < 1.0f) a.holdDuration = 1.0f;
                     }
                 }
 
-                // REGRA 2: TAP ÚNICO CONFLITANTE COM MÚLTIPLOS TAPS
-                // (Se a Ação A exige 1 Tap, mas a Ação B exige 2 ou mais na MESMA tecla, a Ação A PRECISA de Delay)
-                if (a.pcMainKey != 0 && a.pcMainAction == 1 && a.pcMainTapCount == 1 && a.pcModifierKey == 0) {
-                    if (b.pcMainKey == a.pcMainKey && b.pcMainAction == 1 && b.pcMainTapCount > 1 && b.pcModifierKey == 0) {
-                        a.pcDelayTap = true;
-                    }
-                }
-                if (a.gamepadMainKey != 0 && a.gamepadMainAction == 1 && a.gamepadMainTapCount == 1 && a.gamepadModifierKey == 0) {
-                    if (b.gamepadMainKey == a.gamepadMainKey && b.gamepadMainAction == 1 && b.gamepadMainTapCount > 1 && b.gamepadModifierKey == 0) {
-                        a.gamepadDelayTap = true;
-                    }
+                // REGRAS 2 e 3 (Tap Delay Dinâmico Inteligente)
+                auto CheckDelay = [](int aMKey, int aMAct, int aMTap, int aModKey, int aModAct, int aModTap,
+                    int bMKey, int bMAct, int bMTap, int bModKey, int bModAct, int bModTap) {
+
+                        auto getTapInfo = [](int mK, int mAct, int mTap, int modK, int modAct, int modTap, int& outAnchor) {
+                            if (mAct == 1) { outAnchor = (modAct == 0) ? 0 : modK; return std::make_pair(mK, mTap); }
+                            if (modAct == 1) { outAnchor = mK; return std::make_pair(modK, modTap); }
+                            return std::make_pair(0, 0);
+                            };
+
+                        int aAnchor = 0, bAnchor = 0;
+                        auto aTap = getTapInfo(aMKey, aMAct, aMTap, aModKey, aModAct, aModTap, aAnchor);
+                        auto bTap = getTapInfo(bMKey, bMAct, bMTap, bModKey, bModAct, bModTap, bAnchor);
+
+                        if (aTap.first != 0 && bTap.first != 0) {
+                            // Se compartilham o mesmo botão de Tap E a mesma âncora
+                            if (aTap.first == bTap.first && aAnchor == bAnchor) {
+                                // A ação que tem a quantidade MENOR de Taps é a que precisa esperar (Delay)
+                                if (aTap.second < bTap.second) return true;
+                            }
+                        }
+                        return false;
+                    };
+
+                if (CheckDelay(a.pcMainKey, a.pcMainAction, a.pcMainTapCount, a.pcModifierKey, a.pcModAction, a.pcModTapCount,
+                    b.pcMainKey, b.pcMainAction, b.pcMainTapCount, b.pcModifierKey, b.pcModAction, b.pcModTapCount)) {
+                    a.pcDelayTap = true;
                 }
 
-                // REGRA 3: LIMPEZA DE MODIFICADORES DUPLOS (Garante que botões parceiros exijam Delay correto)
-                if (b.pcMainKey != 0 && b.pcModifierKey != 0 && b.pcMainAction == 1 && b.pcModAction == 1) {
-                    b.pcDelayTap = false; // Combos de duas teclas não precisam de delay
-                    if (a.pcModifierKey == 0 && a.pcMainAction == 1 && a.pcMainTapCount == 1) {
-                        if (a.pcMainKey == b.pcMainKey || a.pcMainKey == b.pcModifierKey) {
-                            a.pcDelayTap = true;
-                        }
-                    }
-                }
-                if (b.gamepadMainKey != 0 && b.gamepadModifierKey != 0 && b.gamepadMainAction == 1 && b.gamepadModAction == 1) {
-                    b.gamepadDelayTap = false;
-                    if (a.gamepadModifierKey == 0 && a.gamepadMainAction == 1 && a.gamepadMainTapCount == 1) {
-                        if (a.gamepadMainKey == b.gamepadMainKey || a.gamepadMainKey == b.gamepadModifierKey) {
-                            a.gamepadDelayTap = true;
-                        }
-                    }
+                if (CheckDelay(a.gamepadMainKey, a.gamepadMainAction, a.gamepadMainTapCount, a.gamepadModifierKey, a.gamepadModAction, a.gamepadModTapCount,
+                    b.gamepadMainKey, b.gamepadMainAction, b.gamepadMainTapCount, b.gamepadModifierKey, b.gamepadModAction, b.gamepadModTapCount)) {
+                    a.gamepadDelayTap = true;
                 }
             }
         }

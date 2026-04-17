@@ -106,7 +106,7 @@ namespace PluginLogic {
 
         uint32_t GetUnifiedKeyCode(RE::ButtonEvent* a_event);
 
-        bool IsConditionMet(uint32_t keyCode, ActionState requiredState, int requiredTapCount, std::chrono::steady_clock::time_point now, float tapWindow, float holdDuration);
+        bool IsConditionMet(uint32_t keyCode, ActionState requiredState, int requiredTapCount, std::chrono::steady_clock::time_point now, float tapWindow, float holdDuration, bool isModifier = false);
 
         void ExecuteCallback(const std::string& name);
         void ExecuteReleaseCallback(const std::string& name);

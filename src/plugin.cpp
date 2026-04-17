@@ -84,26 +84,46 @@ namespace InputManagerAPI {
         auto CheckComboConflict = [](
             int aMKey, int aMAct, int aMTap, int aModKey, int aModAct, int aModTap, int aGest,
             int bMKey, int bMAct, int bMTap, int bModKey, int bModAct, int bModTap, int bGest) {
+
                 if (aMKey == 0 || bMKey == 0) return false;
 
+                // Normaliza Ignore e Gesture
                 if (aModAct == 0 || aModAct == 3) aModKey = 0;
                 if (bModAct == 0 || bModAct == 3) bModKey = 0;
 
-                if (aMKey == bMKey && aMAct == bMAct) {
-                    bool mainTapMatch = (aMAct == 1) ? (aMTap == bMTap) : true;
+                // Normaliza Press (4) para Hold (2) para avaliar conflitos justos
+                int normAMAct = (aMAct == 4) ? 2 : aMAct;
+                int normBMAct = (bMAct == 4) ? 2 : bMAct;
+                int normAModAct = (aModAct == 4) ? 2 : aModAct;
+                int normBModAct = (bModAct == 4) ? 2 : bModAct;
+
+                // Verifica Combinação Direta (Main == Main e Mod == Mod)
+                if (aMKey == bMKey && normAMAct == normBMAct) {
+                    bool mainTapMatch = (normAMAct == 1) ? (aMTap == bMTap) : true;
+
                     if (mainTapMatch) {
-                        if (aModAct == 3 && bModAct == 3) return aGest == bGest;
+                        if (aModAct == 3 && bModAct == 3) {
+                            return aGest == bGest;
+                        }
                         else if (aModAct != 3 && bModAct != 3) {
-                            bool modTapMatch = (aModAct == 1) ? (aModTap == bModTap) : true;
-                            return aModKey == bModKey && aModAct == bModAct && modTapMatch;
+                            bool modTapMatch = (normAModAct == 1) ? (aModTap == bModTap) : true;
+                            return aModKey == bModKey && normAModAct == normBModAct && modTapMatch;
                         }
                     }
                 }
+
+                // Verifica Combinação Reversa (Main == Mod e Mod == Main)
                 if (aModAct != 3 && bModAct != 3 && aModKey != 0 && bModKey != 0) {
-                    bool crossTapMatch1 = (aMAct == 1) ? (aMTap == bModTap) : true;
-                    bool crossTapMatch2 = (aModAct == 1) ? (aModTap == bMTap) : true;
-                    if (aMKey == bModKey && aMAct == bModAct && crossTapMatch1 &&
-                        aModKey == bMKey && aModAct == bMAct && crossTapMatch2) return true;
+                    if (aMKey == bModKey && normAMAct == normBModAct &&
+                        aModKey == bMKey && normAModAct == normBMAct) {
+
+                        bool crossTapMatch1 = (normAMAct == 1) ? (aMTap == bModTap) : true;
+                        bool crossTapMatch2 = (normAModAct == 1) ? (aModTap == bMTap) : true;
+
+                        if (crossTapMatch1 && crossTapMatch2) {
+                            return true;
+                        }
+                    }
                 }
                 return false;
             };
