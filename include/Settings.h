@@ -96,7 +96,7 @@ namespace ActionMenuUI {
     };
 
     inline std::vector<ActionEntry> actionList;
-    inline const char* actionStateNames[] = { "Ignore", "Tap", "Hold", "Gesture" };
+    inline const char* actionStateNames[] = { "Ignore", "Tap", "Hold", "Gesture","Press"};
 
     constexpr uint32_t MOUSE_OFFSET = 256;
     constexpr uint32_t GAMEPAD_OFFSET = 266;
@@ -2125,7 +2125,7 @@ namespace ActionMenuUI {
                 ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
 
                 ImGuiMCP::TextColored({ 0.5f, 0.8f, 1.0f, 1.0f }, "Keyboard and Mouse");
-                bool canGesturePC = (action.pcMainAction == 2);
+                bool canGesturePC = (action.pcMainAction == 2 || action.pcMainAction == 4);
                 if (!canGesturePC && action.pcModAction == 3) action.pcModAction = 0;
 
                 if (ImGuiMCP::BeginTable("PCTable", 2, ImGuiMCP::ImGuiTableFlags_BordersInnerH)) {
@@ -2146,7 +2146,9 @@ namespace ActionMenuUI {
                     ImGuiMCP::SetNextItemWidth(150.0f);
                     if (action.pcMainKey == 0) action.pcMainAction = 0;
                     ImGuiMCP::BeginDisabled(action.pcMainKey == 0);
-                    ImGuiMCP::Combo("##pcMAct", &action.pcMainAction, actionStateNames, 3);
+                    if (ImGuiMCP::Combo("##pcMAct", &action.pcMainAction, actionStateNames, 5)) {
+                        if (action.pcMainAction == 3) action.pcMainAction = 0; 
+                    }
                     if (action.pcMainAction == 1) {
                         ImGuiMCP::SameLine();
                         ImGuiMCP::SetNextItemWidth(140.0f);
@@ -2189,9 +2191,8 @@ namespace ActionMenuUI {
                         ImGuiMCP::TableSetColumnIndex(1);
                         ImGuiMCP::SetNextItemWidth(150.0f);
 
-                        int maxStatesPC = canGesturePC ? 4 : 3;
-                        if (ImGuiMCP::Combo("##pcModAct", &action.pcModAction, actionStateNames, maxStatesPC)) {
-
+                        if (ImGuiMCP::Combo("##pcModAct", &action.pcModAction, actionStateNames, 5)) {
+                            if (!canGesturePC && action.pcModAction == 3) action.pcModAction = 0;
                             if (action.pcModAction == 0) {
                                 // Regra 1: Ação é Ignore -> Tecla DEVE ser None
                                 action.pcModifierKey = 0;
@@ -2229,7 +2230,7 @@ namespace ActionMenuUI {
                 ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
 
                 ImGuiMCP::TextColored({ 0.5f, 1.0f, 0.5f, 1.0f }, "Gamepad");
-                bool canGesturePad = (action.gamepadMainAction == 2);
+                bool canGesturePad = (action.gamepadMainAction == 2 || action.gamepadMainAction == 4);
                 if (!canGesturePad && action.gamepadModAction == 3) action.gamepadModAction = 0;
 
                 if (ImGuiMCP::BeginTable("PadTable", 2, ImGuiMCP::ImGuiTableFlags_BordersInnerH)) {
@@ -2250,7 +2251,9 @@ namespace ActionMenuUI {
                     ImGuiMCP::SetNextItemWidth(150.0f);
                     if (action.gamepadMainKey == 0) action.gamepadMainAction = 0;
                     ImGuiMCP::BeginDisabled(action.gamepadMainKey == 0);
-                    ImGuiMCP::Combo("##padMAct", &action.gamepadMainAction, actionStateNames, 3);
+                    if (ImGuiMCP::Combo("##padMAct", &action.gamepadMainAction, actionStateNames, 5)) {
+                        if (action.gamepadMainAction == 3) action.gamepadMainAction = 0;
+                    }
                     if (action.gamepadMainAction == 1) {
                         ImGuiMCP::SameLine();
                         ImGuiMCP::SetNextItemWidth(140.0f);
@@ -2292,8 +2295,9 @@ namespace ActionMenuUI {
                     ImGuiMCP::TableSetColumnIndex(1);
                     ImGuiMCP::SetNextItemWidth(150.0f);
 
-                    int maxStatesPad = canGesturePad ? 4 : 3;
-                    if (ImGuiMCP::Combo("##padModAct", &action.gamepadModAction, actionStateNames, maxStatesPad)) {
+
+                    if (ImGuiMCP::Combo("##padModAct", &action.gamepadModAction, actionStateNames, 5)) {
+                        if (!canGesturePad && action.gamepadModAction == 3) action.gamepadModAction = 0;
 
                         if (action.gamepadModAction == 0) {
                             // Regra 1: Ação é Ignore -> Tecla DEVE ser None

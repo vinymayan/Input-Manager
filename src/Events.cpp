@@ -118,10 +118,12 @@ namespace PluginLogic {
         auto& state = _keyStates[keyCode];
 
         switch (requiredState) {
+        case ActionState::kPress:
+            return state.isDown && !state.isPressFired;
         case ActionState::kTap: {
             if (state.isDown) return false;
             if (std::chrono::duration<float>(now - state.lastUpTime).count() > tapWindow) return false;
-
+            if (std::chrono::duration<float>(now - state.lastDownTime).count() >= holdDuration) return false;
             // Conta os taps válidos que ocorreram DENTRO da janela de tempo
             int validTaps = 0;
             for (auto it = state.tapHistory.rbegin(); it != state.tapHistory.rend(); ++it) {
@@ -132,7 +134,6 @@ namespace PluginLogic {
                     break;
                 }
             }
-
             return (!state.usedAsModifier && validTaps == requiredTapCount);
         }
 
@@ -140,6 +141,7 @@ namespace PluginLogic {
             return state.isDown && !state.isHeldFired &&
                 (std::chrono::duration<float>(now - state.lastDownTime).count() >= holdDuration);
         }
+
         return false;
     }
 
@@ -213,7 +215,27 @@ namespace PluginLogic {
                             }
                             auto player = RE::PlayerCharacter::GetSingleton();
                             if (player) {
-                                player->SetGraphVariableInt("MotionInputIntCMF", static_cast<int>(m));
+                                player->SetGraphVariableInt("MotionInputCMF", static_cast<int>(m));
+								player->SetGraphVariableBool("BFCO_Is0GravityAttck", true);
+                                if (auto charController = player->GetCharController()) {
+                                    // Zera a gravidade do jogador
+                                    charController->gravity = 0.0f;
+
+                                    // Zera o tempo de queda para evitar dano de queda acumulado quando a gravidade voltar
+                                    charController->fallTime = 0.0f;
+
+                                    charController->outVelocity.quad.m128_f32[2] = 0.0f;
+                                    charController->initialVelocity.quad.m128_f32[2] = 0.0f;
+                                    charController->velocityMod.quad.m128_f32[2] = 0.0f;
+                                    charController->direction.quad.m128_f32[2] = 0.0f;
+
+                                    // Recupera a velocidade linear atual do corpo rígido (RigidBody) na engine e anula o eixo Z
+                                    RE::hkVector4 linearVel;
+                                    charController->GetLinearVelocityImpl(linearVel);
+                                    linearVel.quad.m128_f32[2] = 0.0f;
+                                    charController->SetLinearVelocityImpl(linearVel);
+                                }
+								player->NotifyAnimationGraph("BFCO_0GravityStart");
                             }
                             InputManagerAPI::SendMotionTriggeredEvent(static_cast<int>(m), motionEntry.name);
                         }
@@ -395,6 +417,7 @@ namespace PluginLogic {
                 if (buttonEvent->IsDown()) {
                     if (!state.isDown) {
                         state.lastDownTime = now;
+                        state.isPressFired = false;
                     }
                     state.isDown = true;
 
@@ -419,9 +442,9 @@ namespace PluginLogic {
                         for (auto& binding : _bindings) {
                             if (binding.activeHold) {
                                 // Verifica se a tecla solta era a tecla principal do Hold ou a modificadora do Hold
-                                bool mainReleased = (binding.combo.mainKey == id && binding.combo.mainActionType == ActionState::kHold);
-                                bool modReleased = (binding.combo.modifierKey == id && binding.combo.modifierActionType == ActionState::kHold);
-
+                                bool mainReleased = (binding.combo.mainKey == id && (binding.combo.mainActionType == ActionState::kHold || binding.combo.mainActionType == ActionState::kPress));
+                                bool modReleased = (binding.combo.modifierKey == id && (binding.combo.modifierActionType == ActionState::kHold || binding.combo.modifierActionType == ActionState::kPress));
+                                
                                 if (mainReleased || modReleased) {
                                     ExecuteReleaseCallback(binding.name);
                                     binding.activeHold = false; // Desliga a flag, o hold acabou
@@ -529,7 +552,14 @@ namespace PluginLogic {
 
                             if (binding.combo.mainActionType == ActionState::kHold) _keyStates[binding.combo.mainKey].isHeldFired = true;
                             if (binding.combo.modifierActionType == ActionState::kHold) _keyStates[binding.combo.modifierKey].isHeldFired = true;
-                            if (binding.combo.mainActionType == ActionState::kHold || binding.combo.modifierActionType == ActionState::kHold) {
+
+                            // <-- ADICIONADO: Trava o Press para não metralhar callbacks todo frame
+                            if (binding.combo.mainActionType == ActionState::kPress) _keyStates[binding.combo.mainKey].isPressFired = true;
+                            if (binding.combo.modifierActionType == ActionState::kPress) _keyStates[binding.combo.modifierKey].isPressFired = true;
+
+                            // <-- ATUALIZADO: Agora tanto Hold quanto Press acionam a escuta do ActionReleased
+                            if (binding.combo.mainActionType == ActionState::kHold || binding.combo.modifierActionType == ActionState::kHold ||
+                                binding.combo.mainActionType == ActionState::kPress || binding.combo.modifierActionType == ActionState::kPress) {
                                 binding.activeHold = true;
                             }
                             // Flag de modificador consumido

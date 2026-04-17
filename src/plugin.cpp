@@ -58,8 +58,8 @@ namespace InputManagerAPI {
     bool InputManagerAPI_Impl::UpdateActionMapping(int actionID, const ActionInfo& newMapping) {
         if (actionID < 0 || actionID >= ActionMenuUI::actionList.size()) return false;
 
-        if (newMapping.pcModAction == 3 && newMapping.pcMainAction != 2) return false;
-        if (newMapping.gamepadModAction == 3 && newMapping.gamepadMainAction != 2) return false;
+        if (newMapping.pcModAction == 3 && (newMapping.pcMainAction != 2 && newMapping.pcMainAction != 4)) return false;
+        if (newMapping.gamepadModAction == 3 && (newMapping.gamepadMainAction != 2 && newMapping.gamepadMainAction != 4)) return false;
 
         // Extrair os valores reais baseados na tua lógica
         int newPcGestIndex = (newMapping.pcModAction == 3) ? newMapping.pcModifierKey : -1;

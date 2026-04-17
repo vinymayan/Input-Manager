@@ -14,7 +14,8 @@ namespace PluginLogic {
         kIgnored = 0,   // Usado se a tecla parceira não for necessária
         kTap,
         kHold,
-        kGesture
+        kGesture,
+        kPress
     };
 
     struct ComboKey {
@@ -45,6 +46,7 @@ namespace PluginLogic {
     struct KeyState {
         bool isDown = false;
         bool isHeldFired = false;
+        bool isPressFired = false;
         bool usedAsModifier = false;      // Evita as Ações Fantasma
         std::chrono::steady_clock::time_point lastDownTime;
         std::chrono::steady_clock::time_point lastUpTime;
