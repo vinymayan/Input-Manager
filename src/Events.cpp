@@ -213,30 +213,6 @@ namespace PluginLogic {
                                 logger::info("[SUCCESS] {}", msg);
                                 RE::SendHUDMessage::ShowHUDMessage(msg.c_str());
                             }
-                            auto player = RE::PlayerCharacter::GetSingleton();
-                            if (player) {
-                                player->SetGraphVariableInt("MotionInputCMF", static_cast<int>(m));
-								player->SetGraphVariableBool("BFCO_Is0GravityAttck", true);
-                                if (auto charController = player->GetCharController()) {
-                                    // Zera a gravidade do jogador
-                                    charController->gravity = 0.0f;
-
-                                    // Zera o tempo de queda para evitar dano de queda acumulado quando a gravidade voltar
-                                    charController->fallTime = 0.0f;
-
-                                    charController->outVelocity.quad.m128_f32[2] = 0.0f;
-                                    charController->initialVelocity.quad.m128_f32[2] = 0.0f;
-                                    charController->velocityMod.quad.m128_f32[2] = 0.0f;
-                                    charController->direction.quad.m128_f32[2] = 0.0f;
-
-                                    // Recupera a velocidade linear atual do corpo rígido (RigidBody) na engine e anula o eixo Z
-                                    RE::hkVector4 linearVel;
-                                    charController->GetLinearVelocityImpl(linearVel);
-                                    linearVel.quad.m128_f32[2] = 0.0f;
-                                    charController->SetLinearVelocityImpl(linearVel);
-                                }
-								player->NotifyAnimationGraph("BFCO_0GravityStart");
-                            }
                             InputManagerAPI::SendMotionTriggeredEvent(static_cast<int>(m), motionEntry.name);
                         }
 
