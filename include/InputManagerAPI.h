@@ -58,7 +58,8 @@ namespace InputManagerAPI {
         virtual const char* GetInputName(int inputType, int inputID) = 0;
         virtual int CreateInput(int inputType, const char* inputName) = 0;
         virtual bool DeleteInput(int inputType, int inputID) = 0;
-        virtual void UpdateListener(int inputType, int inputID, const char* modName, const char* purpose, bool isRegistering) = 0;
+        // Adicionando arrays de validação opcionais
+        virtual void UpdateListener(int inputType, int inputID, const char* modName, const char* purpose, bool isRegistering, const int* validMainActions = nullptr, int mainCount = 0, const int* validModActions = nullptr, int modCount = 0) = 0;
         virtual size_t GetListenerCount(int inputType, int inputID) = 0;
         virtual const char* GetListenerModName(int inputType, int inputID, size_t index) = 0;
 

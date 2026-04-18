@@ -33,6 +33,55 @@ namespace ActionMenuUI {
     const std::string GESTURES_DIR = BASE_DIR + "Gestures/";
     const std::string MOTIONS_DIR = BASE_DIR + "Motion Inputs/";
     const std::string CACHE_PATH = BASE_DIR + "IDCache.json";
+    const std::string LANG_PATH = BASE_DIR + "Language.json";
+
+    inline std::unordered_map<std::string, std::string> LangMap;
+
+    inline void LoadLanguage() {
+        LangMap.clear();
+        std::ifstream file(LANG_PATH, std::ios::binary);
+        if (!file.is_open()) {
+            logger::warn("[Input Manager] Language.json nao encontrado. Usando textos padroes.");
+            return;
+        }
+
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+        std::string jsonStr = buffer.str();
+        file.close();
+
+        if (jsonStr.size() >= 3 && (unsigned char)jsonStr[0] == 0xEF &&
+            (unsigned char)jsonStr[1] == 0xBB && (unsigned char)jsonStr[2] == 0xBF) {
+            jsonStr.erase(0, 3);
+        }
+
+        rapidjson::Document doc;
+        doc.Parse(jsonStr.c_str());
+
+        if (doc.HasParseError()) return;
+
+        if (doc.IsObject()) {
+            for (auto itr = doc.MemberBegin(); itr != doc.MemberEnd(); ++itr) {
+                if (itr->value.IsObject()) {
+                    std::string category = itr->name.GetString();
+                    for (auto jtr = itr->value.MemberBegin(); jtr != itr->value.MemberEnd(); ++jtr) {
+                        if (jtr->value.IsString()) {
+                            LangMap[category + "." + jtr->name.GetString()] = jtr->value.GetString();
+                        }
+                    }
+                }
+                else if (itr->value.IsString()) {
+                    LangMap[itr->name.GetString()] = itr->value.GetString();
+                }
+            }
+        }
+    }
+
+    inline const char* GetLoc(const std::string& key, const char* defaultVal) {
+        auto it = LangMap.find(key);
+        if (it != LangMap.end()) return it->second.c_str();
+        return defaultVal;
+    }
 
     inline std::map<std::string, int> actionCache;
     inline std::map<std::string, int> gestureCache;
@@ -96,7 +145,16 @@ namespace ActionMenuUI {
     };
 
     inline std::vector<ActionEntry> actionList;
-    inline const char* actionStateNames[] = { "Ignore", "Tap", "Hold", "Gesture","Press"};
+    inline const char* GetStateName(int state) {
+        switch (state) {
+        case 0: return GetLoc("state.ignore", "Ignore");
+        case 1: return GetLoc("state.tap", "Tap");
+        case 2: return GetLoc("state.hold", "Hold");
+        case 3: return GetLoc("state.gesture", "Gesture");
+        case 4: return GetLoc("state.press", "Press");
+        }
+        return GetLoc("common.unknown", "Unknown");
+    }
 
     constexpr uint32_t MOUSE_OFFSET = 256;
     constexpr uint32_t GAMEPAD_OFFSET = 266;
@@ -764,13 +822,13 @@ namespace ActionMenuUI {
 
     inline void ShowDelayTooltip() {
         if (ImGuiMCP::IsItemHovered()) {
-            ImGuiMCP::SetTooltip(
+            ImGuiMCP::SetTooltip("%s", GetLoc("action.tooltip_delay",
                 "What happens if unchecked?\n"
-                "If there is another Double Tap action using this same key,\n"
-                "the Single Tap will trigger accidentally before the Double Tap.\n\n"
-                "Check this option for the system to wait a short time,\n"
-                "ensuring isolated actions do not overlap."
-            );
+                "If there is another action requiring MORE taps (e.g., Tap 2) on this same key,\n"
+                "the action with fewer taps (e.g., Tap 1) will trigger accidentally before it.\n\n"
+                "Check this option so the system waits for the tap window to close,\n"
+                "ensuring the exact number of taps is respected and preventing overlap."
+            ));
         }
     }
 
@@ -783,40 +841,37 @@ namespace ActionMenuUI {
         std::string summary = "";
 
         if (a.pcMainKey != 0) {
-            summary += "PC: ";
-
+            summary += GetLoc("common.pc", "PC") + std::string(": ");
             int mainIdx = GetIndexFromID(a.pcMainKey, pcKeyIDs, std::size(pcKeyIDs));
-            summary += std::string(pcKeyNames[mainIdx]) + " (" + actionStateNames[a.pcMainAction] + ")";
-
+            summary += std::string(pcKeyNames[mainIdx]) + " (" + GetStateName(a.pcMainAction) + ")";
 
             if (a.pcModAction == 3) {
-                std::string gName = (a.gestureIndex >= 0 && a.gestureIndex < movementList.size()) ? movementList[a.gestureIndex].name : "Unknown Gesture";
-                summary += "  +  " + gName + " (Gesture)";
+                std::string gName = (a.gestureIndex >= 0 && a.gestureIndex < movementList.size()) ? movementList[a.gestureIndex].name : GetLoc("common.unknown_gesture", "Unknown Gesture");
+                summary += "  +  " + gName + " (" + GetLoc("state.gesture", "Gesture") + ")";
             }
             else if (a.pcModifierKey != 0) {
                 int modIdx = GetIndexFromID(a.pcModifierKey, pcKeyIDs, std::size(pcKeyIDs));
-                summary += "  +  " + std::string(pcKeyNames[modIdx]) + " (" + actionStateNames[a.pcModAction] + ")";
+                summary += "  +  " + std::string(pcKeyNames[modIdx]) + " (" + GetStateName(a.pcModAction) + ")";
             }
         }
 
         if (a.gamepadMainKey != 0) {
             if (!summary.empty()) summary += "  |  ";
-            summary += "PAD: ";
-
+            summary += GetLoc("common.pad", "PAD") + std::string(": ");
             int mainIdx = GetIndexFromID(a.gamepadMainKey, gamepadKeyIDs, std::size(gamepadKeyIDs));
-            summary += std::string(gamepadKeyNames[mainIdx]) + " (" + actionStateNames[a.gamepadMainAction] + ")";
+            summary += std::string(gamepadKeyNames[mainIdx]) + " (" + GetStateName(a.gamepadMainAction) + ")";
 
             if (a.gamepadModAction == 3) {
-                std::string gName = (a.gestureIndex >= 0 && a.gestureIndex < movementList.size()) ? movementList[a.gestureIndex].name : "Unknown Gesture";
-                summary += "  +  " + gName + " (Gesture)";
+                std::string gName = (a.gestureIndex >= 0 && a.gestureIndex < movementList.size()) ? movementList[a.gestureIndex].name : GetLoc("common.unknown_gesture", "Unknown Gesture");
+                summary += "  +  " + gName + " (" + GetLoc("state.gesture", "Gesture") + ")";
             }
             else if (a.gamepadModifierKey != 0) {
                 int modIdx = GetIndexFromID(a.gamepadModifierKey, gamepadKeyIDs, std::size(gamepadKeyIDs));
-                summary += "  +  " + std::string(gamepadKeyNames[modIdx]) + " (" + actionStateNames[a.gamepadModAction] + ")";
+                summary += "  +  " + std::string(gamepadKeyNames[modIdx]) + " (" + GetStateName(a.gamepadModAction) + ")";
             }
         }
 
-        if (summary.empty()) summary = "No keys configured";
+        if (summary.empty()) summary = GetLoc("dash.no_keys", "No keys configured");
         return summary;
     }
 
@@ -844,23 +899,22 @@ namespace ActionMenuUI {
 
     inline bool SearchableCombo(const char* label, int* current_item, const char* const items[], int items_count) {
         bool changed = false;
-        const char* preview_value = (*current_item >= 0 && *current_item < items_count) ? items[*current_item] : "None";
+        const char* preview_value = (*current_item >= 0 && *current_item < items_count) ? items[*current_item] : GetLoc("common.none", "None");
 
         if (ImGuiMCP::BeginCombo(label, preview_value)) {
             static char searchBuf[128] = "";
 
-            // Quando a lista abre, limpa a caixa de texto e foca nela
             if (ImGuiMCP::IsWindowAppearing()) {
                 searchBuf[0] = '\0';
                 ImGuiMCP::SetKeyboardFocusHere();
             }
 
-            ImGuiMCP::InputText("Filter...##Search", searchBuf, sizeof(searchBuf));
+            std::string searchLabel = std::string(GetLoc("common.search", "Filter...")) + "##Search";
+            ImGuiMCP::InputText(searchLabel.c_str(), searchBuf, sizeof(searchBuf));
             ImGuiMCP::Separator();
 
             std::string searchLower = ToLower(searchBuf);
 
-            // Popula os Selectables filtrando a array base
             for (int i = 0; i < items_count; i++) {
                 if (searchLower.empty() || ToLower(items[i]).find(searchLower) != std::string::npos) {
                     bool is_selected = (*current_item == i);
@@ -868,7 +922,6 @@ namespace ActionMenuUI {
                         *current_item = i;
                         changed = true;
                     }
-                    // Desce a barra de rolagem até o item selecionado ao abrir
                     if (is_selected && ImGuiMCP::IsWindowAppearing()) {
                         ImGuiMCP::SetScrollHereY();
                     }
@@ -884,7 +937,7 @@ namespace ActionMenuUI {
     // =========================================================================
 
     inline void RenderMotionMenu() {
-        ImGuiMCP::Text("Input Manager - Motion Inputs (Fighting Game Style)");
+        ImGuiMCP::Text("%s", GetLoc("motion.title", "Input Manager - Motion Inputs (Fighting Game Style)"));
         ImGuiMCP::Separator(); ImGuiMCP::Spacing();
 
         bool hasMotionConflict = false;
@@ -892,19 +945,17 @@ namespace ActionMenuUI {
 
         for (size_t i = 0; i < motionList.size(); ++i) {
             for (size_t j = i + 1; j < motionList.size(); ++j) {
-                // Checa Nomes Iguais
                 if (SanitizeFileName(motionList[i].name) == SanitizeFileName(motionList[j].name)) {
                     hasMotionConflict = true;
-                    motionErrorMsg = "DUPLICATE NAME: Motions '" + std::string(motionList[i].name) + "' and '" + std::string(motionList[j].name) + "' conflict.";
+                    motionErrorMsg = GetLoc("error.dup_name", "DUPLICATE NAME: Motions conflict.");
                     break;
                 }
-                // Checa Sequências Iguais (PC ou Pad)
                 bool pcConflict = (!motionList[i].pcSequence.empty() && motionList[i].pcSequence == motionList[j].pcSequence);
                 bool padConflict = (!motionList[i].padSequence.empty() && motionList[i].padSequence == motionList[j].padSequence);
 
                 if (pcConflict || padConflict) {
                     hasMotionConflict = true;
-                    motionErrorMsg = "DUPLICATE SEQUENCE: '" + std::string(motionList[i].name) + "' and '" + std::string(motionList[j].name) + "' have identical " + (pcConflict ? "PC" : "Gamepad") + " inputs.";
+                    motionErrorMsg = GetLoc("error.dup_seq", "DUPLICATE SEQUENCE: Identical inputs detected.");
                     break;
                 }
             }
@@ -912,31 +963,49 @@ namespace ActionMenuUI {
         }
 
         if (hasMotionConflict) {
-            ImGuiMCP::TextColored({ 1.0f, 0.2f, 0.2f, 1.0f }, "[CONFIGURATION ERROR]");
+            ImGuiMCP::TextColored({ 1.0f, 0.2f, 0.2f, 1.0f }, "%s", GetLoc("error.conflict_title", "[CONFIGURATION ERROR]"));
             ImGuiMCP::TextColored({ 1.0f, 0.8f, 0.2f, 1.0f }, "%s", motionErrorMsg.c_str());
-            ImGuiMCP::TextColored({ 0.7f, 0.7f, 0.7f, 1.0f }, "Resolve the duplication by changing the name or recording a new sequence.");
+            ImGuiMCP::TextColored({ 0.7f, 0.7f, 0.7f, 1.0f }, "%s", GetLoc("error.resolve_motion", "Resolve the duplication by changing the name or recording a new sequence."));
             ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
         }
 
-        // Trava o botão Save se houver conflito
         ImGuiMCP::BeginDisabled(hasMotionConflict);
         ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_Button, { 0.1f, 0.5f, 0.1f, 1.0f });
         ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_ButtonHovered, { 0.2f, 0.6f, 0.2f, 1.0f });
         ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_ButtonActive, { 0.1f, 0.4f, 0.1f, 1.0f });
 
-        if (ImGuiMCP::Button("Save Motion Inputs")) {
+        if (ImGuiMCP::Button(GetLoc("motion.save_btn", "Save Motion Inputs"))) {
             SaveMotionsToJson();
         }
 
         ImGuiMCP::PopStyleColor(3);
         ImGuiMCP::EndDisabled();
         ImGuiMCP::SameLine();
-        if (ImGuiMCP::Button("Add New Motion")) {
-            motionList.push_back(MotionEntry());
+
+        if (ImGuiMCP::Button(GetLoc("motion.add_btn", "Add New Motion"))) {
+            MotionEntry newMotion;
+            std::string baseName = GetLoc("motion.default_name", "New Motion");
+            std::string finalName = baseName;
+            int counter = 1;
+            bool exists = true;
+            while (exists) {
+                exists = false;
+                for (const auto& m : motionList) {
+                    if (std::string(m.name) == finalName) {
+                        exists = true;
+                        break;
+                    }
+                }
+                if (exists) {
+                    finalName = baseName + " " + std::to_string(counter);
+                    counter++;
+                }
+            }
+            strncpy_s(newMotion.name, finalName.c_str(), sizeof(newMotion.name) - 1);
+            motionList.push_back(newMotion);
         }
         ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
 
-        // Máquina de Estados Global para a Janela
         enum MotionMenuState { M_NONE, M_WAITING_REC, M_RECORDING, M_WAITING_TEST, M_TESTING, M_TEST_DONE };
         static MotionMenuState m_state = M_NONE;
         static int m_activeIndex = -1;
@@ -946,17 +1015,13 @@ namespace ActionMenuUI {
         auto keyMgr = PluginLogic::KeyManager::GetSingleton();
         bool isCapturing = (m_state != M_NONE && m_activeIndex >= 0 && m_activeIndex < motionList.size());
 
-        // ====================================================================
-        // INTERFACE DO TOPO: GRAVAÇÃO E TESTE
-        // ====================================================================
         if (isCapturing) {
-            ImGuiMCP::TextColored({ 1.0f, 0.5f, 0.0f, 1.0f }, ">>> MOTION CAPTURE/TEST MODE <<<");
+            ImGuiMCP::TextColored({ 1.0f, 0.5f, 0.0f, 1.0f }, "%s", GetLoc("motion.capture_mode", ">>> MOTION CAPTURE/TEST MODE <<<"));
             auto& motion = motionList[m_activeIndex];
             float maxT = motion.timeWindow;
 
-            // ETAPA 1: AGUARDAR ENTER
             if (m_state == M_WAITING_REC || m_state == M_WAITING_TEST) {
-                ImGuiMCP::Text("Prepare yourself and press [ENTER] to START %s.", m_state == M_WAITING_REC ? "RECORDING" : "TESTING");
+                ImGuiMCP::Text("%s", GetLoc("motion.press_enter", "Prepare yourself and press [ENTER] to START."));
                 if (ImGuiMCP::IsKeyPressed(ImGuiMCP::ImGuiKey_Enter)) {
                     m_uiStartTime = std::chrono::steady_clock::now();
                     if (m_state == M_WAITING_REC) {
@@ -969,11 +1034,10 @@ namespace ActionMenuUI {
                     }
                 }
                 ImGuiMCP::Spacing();
-                if (ImGuiMCP::Button("Cancel")) { m_state = M_NONE; m_activeIndex = -1; }
+                if (ImGuiMCP::Button(GetLoc("common.cancel", "Cancel"))) { m_state = M_NONE; m_activeIndex = -1; }
             }
-            // ETAPA 2: GRAVANDO
             else if (m_state == M_RECORDING) {
-                ImGuiMCP::TextColored({ 1.0f, 0.2f, 0.2f, 1.0f }, ">>> RECORDING IN PROGRESS <<<");
+                ImGuiMCP::TextColored({ 1.0f, 0.2f, 0.2f, 1.0f }, "%s", GetLoc("motion.recording", ">>> RECORDING IN PROGRESS <<<"));
                 float elapsed = std::chrono::duration<float>(std::chrono::steady_clock::now() - m_uiStartTime).count();
                 float prog = std::min(elapsed / maxT, 1.0f);
 
@@ -982,28 +1046,20 @@ namespace ActionMenuUI {
                 ImGuiMCP::Spacing();
 
                 auto seq = keyMgr->GetRecordedMotion();
-                if (seq.size() > 20) {
-                    seq.resize(20);
-                }
-                std::string s = "Captured: ";
+                if (seq.size() > 20) seq.resize(20);
+                std::string s = GetLoc("motion.captured", "Captured: ");
                 for (auto k : seq) s += "[" + FormatMotionKey(k) + "] ";
                 ImGuiMCP::TextWrapped("%s", s.c_str());
 
-                // Sai sozinho quando o timer expira no backend
                 if (!keyMgr->IsRecordingMotion() || seq.size() >= 20) {
                     if (m_activePad) motion.padSequence = seq; else motion.pcSequence = seq;
-
-                    if (keyMgr->IsRecordingMotion()) {
-                        keyMgr->StopMotionRecording();
-                    }
-
+                    if (keyMgr->IsRecordingMotion()) keyMgr->StopMotionRecording();
                     m_state = M_NONE; m_activeIndex = -1;
                 }
             }
-            // ETAPA 3: TESTANDO
             else if (m_state == M_TESTING) {
-                ImGuiMCP::TextColored({ 0.2f, 1.0f, 1.0f, 1.0f }, ">>> TESTING IN PROGRESS <<<");
-                ImGuiMCP::Text("Execute the sequence now!");
+                ImGuiMCP::TextColored({ 0.2f, 1.0f, 1.0f, 1.0f }, "%s", GetLoc("motion.testing", ">>> TESTING IN PROGRESS <<<"));
+                ImGuiMCP::Text("%s", GetLoc("motion.execute_now", "Execute the sequence now!"));
 
                 float elapsed = std::chrono::duration<float>(std::chrono::steady_clock::now() - m_uiStartTime).count();
                 float prog = std::min(elapsed / maxT, 1.0f);
@@ -1011,23 +1067,17 @@ namespace ActionMenuUI {
                 char buf[32]; snprintf(buf, sizeof(buf), "%.1f / %.1fs", elapsed, maxT);
                 ImGuiMCP::ProgressBar(prog, { -1.0f, 0.0f }, buf);
 
-                if (keyMgr->GetMotionTestSuccess()) {
-                    m_state = M_TEST_DONE;
-                }
-                else if (!keyMgr->IsTestingMotion()) {
-                    m_state = M_TEST_DONE; // Falhou no timer
-                }
+                if (keyMgr->GetMotionTestSuccess() || !keyMgr->IsTestingMotion()) m_state = M_TEST_DONE;
             }
-            // ETAPA 4: RESULTADO DO TESTE
             else if (m_state == M_TEST_DONE) {
                 if (keyMgr->GetMotionTestSuccess()) {
-                    ImGuiMCP::TextColored({ 0.2f, 1.0f, 0.2f, 1.0f }, "SUCCESS! Motion executed correctly in time!");
+                    ImGuiMCP::TextColored({ 0.2f, 1.0f, 0.2f, 1.0f }, "%s", GetLoc("motion.success", "SUCCESS! Motion executed correctly!"));
                 }
                 else {
-                    ImGuiMCP::TextColored({ 1.0f, 0.2f, 0.2f, 1.0f }, "FAILED! You ran out of time or pressed wrong buttons.");
+                    ImGuiMCP::TextColored({ 1.0f, 0.2f, 0.2f, 1.0f }, "%s", GetLoc("motion.failed", "FAILED! You ran out of time or pressed wrong buttons."));
                 }
                 ImGuiMCP::Spacing();
-                if (ImGuiMCP::Button("Close")) {
+                if (ImGuiMCP::Button(GetLoc("common.close", "Close"))) {
                     keyMgr->ResetMotionTest();
                     m_state = M_NONE; m_activeIndex = -1;
                 }
@@ -1037,9 +1087,6 @@ namespace ActionMenuUI {
             ImGuiMCP::BeginDisabled();
         }
 
-        // ====================================================================
-        // LISTA DE MOTION INPUTS
-        // ====================================================================
         auto motionListeners = PluginLogic::KeyManager::GetSingleton()->GetMotionListeners();
         for (size_t i = 0; i < motionList.size(); ++i) {
             auto& motion = motionList[i];
@@ -1050,74 +1097,68 @@ namespace ActionMenuUI {
             if (ImGuiMCP::CollapsingHeader(headerLabel.c_str())) {
                 ImGuiMCP::Indent();
                 ImGuiMCP::Spacing();
-                ImGuiMCP::InputText("Motion Name", motion.name, sizeof(motion.name));
+                ImGuiMCP::InputText(GetLoc("common.name", "Name"), motion.name, sizeof(motion.name));
 
-                // --- SISTEMA DE REORDENAMENTO ---
                 ImGuiMCP::Spacing();
                 int currentId = static_cast<int>(i);
                 ImGuiMCP::PushItemWidth(200.0f);
-                if (ImGuiMCP::InputInt("Motion ID", &currentId, 1, 10, ImGuiMCP::ImGuiInputTextFlags_EnterReturnsTrue)) {
+                if (ImGuiMCP::InputInt(GetLoc("common.id", "ID"), &currentId, 1, 10, ImGuiMCP::ImGuiInputTextFlags_EnterReturnsTrue)) {
                     if (currentId >= 0 && currentId < static_cast<int>(motionList.size()) && currentId != i) {
                         std::swap(motionList[i], motionList[currentId]);
                     }
                 }
                 ImGuiMCP::PopItemWidth();
-                if (ImGuiMCP::IsItemHovered()) ImGuiMCP::SetTooltip("Type the ID and press ENTER to swap motions.");
+                if (ImGuiMCP::IsItemHovered()) ImGuiMCP::SetTooltip("%s", GetLoc("common.swap_id_tt", "Type ID and press ENTER to swap."));
                 ImGuiMCP::SameLine();
 
                 ImGuiMCP::BeginDisabled(i == 0);
-                if (ImGuiMCP::Button("Move Up##mot")) std::swap(motionList[i], motionList[i - 1]);
+                if (ImGuiMCP::Button(GetLoc("common.move_up", "Move Up"))) std::swap(motionList[i], motionList[i - 1]);
                 ImGuiMCP::EndDisabled();
                 ImGuiMCP::SameLine();
 
                 ImGuiMCP::BeginDisabled(i == motionList.size() - 1);
-                if (ImGuiMCP::Button("Move Down##mot")) std::swap(motionList[i], motionList[i + 1]);
+                if (ImGuiMCP::Button(GetLoc("common.move_down", "Move Down"))) std::swap(motionList[i], motionList[i + 1]);
                 ImGuiMCP::EndDisabled();
 
                 ImGuiMCP::Spacing();
                 ImGuiMCP::PushItemWidth(200.0f);
-                ImGuiMCP::SliderFloat("Time Window (s)##timeW", &motion.timeWindow, 0.5f, 4.0f, "%.1f");
+                ImGuiMCP::SliderFloat(GetLoc("motion.time_window", "Time Window (s)"), &motion.timeWindow, 0.5f, 4.0f, "%.1f");
                 ImGuiMCP::PopItemWidth();
-                if (ImGuiMCP::IsItemHovered()) ImGuiMCP::SetTooltip("Max time allowed to complete the full sequence.");
                 ImGuiMCP::Spacing();
 
-                // PC BLOCK
-                ImGuiMCP::TextColored({ 0.5f, 1.0f, 0.5f, 1.0f }, "PC Sequence:");
+                ImGuiMCP::TextColored({ 0.5f, 1.0f, 0.5f, 1.0f }, "%s", GetLoc("motion.pc_seq", "PC Sequence:"));
                 std::string pcStr = "";
                 for (uint32_t k : motion.pcSequence) pcStr += "[" + FormatMotionKey(k) + "] ";
-                ImGuiMCP::TextWrapped("%s", pcStr.empty() ? "None" : pcStr.c_str());
+                ImGuiMCP::TextWrapped("%s", pcStr.empty() ? GetLoc("common.none", "None") : pcStr.c_str());
 
-                if (ImGuiMCP::Button("Record PC")) {
+                if (ImGuiMCP::Button(GetLoc("motion.rec_pc", "Record PC"))) {
                     m_activeIndex = static_cast<int>(i); m_activePad = false; m_state = M_WAITING_REC;
                 }
                 ImGuiMCP::SameLine();
-                if (ImGuiMCP::Button("Test PC")) {
+                if (ImGuiMCP::Button(GetLoc("motion.test_pc", "Test PC"))) {
                     m_activeIndex = static_cast<int>(i); m_activePad = false; m_state = M_WAITING_TEST;
                 }
                 ImGuiMCP::Spacing();
 
-                // GAMEPAD BLOCK
-                ImGuiMCP::TextColored({ 0.5f, 1.0f, 0.5f, 1.0f }, "Gamepad Sequence:");
+                ImGuiMCP::TextColored({ 0.5f, 1.0f, 0.5f, 1.0f }, "%s", GetLoc("motion.pad_seq", "Gamepad Sequence:"));
                 std::string padStr = "";
                 for (uint32_t k : motion.padSequence) padStr += "[" + FormatMotionKey(k) + "] ";
-                ImGuiMCP::TextWrapped("%s", padStr.empty() ? "None" : padStr.c_str());
+                ImGuiMCP::TextWrapped("%s", padStr.empty() ? GetLoc("common.none", "None") : padStr.c_str());
 
-                if (ImGuiMCP::Button("Record Gamepad")) {
+                if (ImGuiMCP::Button(GetLoc("motion.rec_pad", "Record Gamepad"))) {
                     m_activeIndex = static_cast<int>(i); m_activePad = true; m_state = M_WAITING_REC;
                 }
                 ImGuiMCP::SameLine();
-                if (ImGuiMCP::Button("Test Gamepad")) {
+                if (ImGuiMCP::Button(GetLoc("motion.test_pad", "Test Gamepad"))) {
                     m_activeIndex = static_cast<int>(i); m_activePad = true; m_state = M_WAITING_TEST;
                 }
 
                 std::vector<PluginLogic::ModListener> activeListeners;
-                for (const auto& l : motionListeners) {
-                    if (l.actionID == static_cast<int>(i)) activeListeners.push_back(l);
-                }
+                for (const auto& l : motionListeners) if (l.actionID == static_cast<int>(i)) activeListeners.push_back(l);
 
                 if (!activeListeners.empty()) {
                     ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
-                    ImGuiMCP::TextColored({ 0.9f, 0.6f, 1.0f, 1.0f }, "Mods Connected to this Motion:");
+                    ImGuiMCP::TextColored({ 0.9f, 0.6f, 1.0f, 1.0f }, "%s", GetLoc("common.connected_mods", "Mods Connected:"));
                     for (const auto& listener : activeListeners) {
                         ImGuiMCP::BulletText("Mod: '%s'  |  Purpose: '%s'", listener.modName.c_str(), listener.purpose.c_str());
                     }
@@ -1125,7 +1166,7 @@ namespace ActionMenuUI {
 
                 ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
                 ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_Button, { 0.6f, 0.2f, 0.2f, 1.0f });
-                if (ImGuiMCP::Button("Delete Motion")) {
+                if (ImGuiMCP::Button(GetLoc("common.delete", "Delete"))) {
                     motionList.erase(motionList.begin() + i);
                     ImGuiMCP::PopStyleColor();
                     ImGuiMCP::Unindent();
@@ -1138,26 +1179,18 @@ namespace ActionMenuUI {
             }
             ImGuiMCP::PopID();
         }
-        if (isCapturing) {
-            ImGuiMCP::EndDisabled();
-        }
+        if (isCapturing) ImGuiMCP::EndDisabled();
     }
 
     inline void RenderSummaryDashboard(const std::vector<PluginLogic::ModListener>& listeners, const std::vector<PluginLogic::ModListener>& motionListeners) {
-        ImGuiMCP::TextColored({ 0.5f, 1.0f, 0.5f, 1.0f }, "Keys and Combos in Use");
-        ImGuiMCP::TextDisabled("Overview grouped by physical key for easy identification.");
+        ImGuiMCP::TextColored({ 0.5f, 1.0f, 0.5f, 1.0f }, "%s", GetLoc("dash.title", "Keys and Combos in Use"));
+        ImGuiMCP::TextDisabled("%s", GetLoc("dash.desc", "Overview grouped by physical key for easy identification."));
         ImGuiMCP::Spacing();
 
-        struct DashboardEntry {
-            std::vector<int> actionIDs;
-            std::vector<int> motionIDs;
-        };
-
+        struct DashboardEntry { std::vector<int> actionIDs; std::vector<int> motionIDs; };
         std::vector<std::string> uniqueMods;
         auto addUniqueMod = [&](const std::string& modName) {
-            if (std::find(uniqueMods.begin(), uniqueMods.end(), modName) == uniqueMods.end()) {
-                uniqueMods.push_back(modName);
-            }
+            if (std::find(uniqueMods.begin(), uniqueMods.end(), modName) == uniqueMods.end()) uniqueMods.push_back(modName);
             };
 
         for (const auto& l : listeners) addUniqueMod(l.modName);
@@ -1169,62 +1202,48 @@ namespace ActionMenuUI {
         static std::string dashSelectedModFilter = "";
         static char dashModSearchBuf[128] = "";
 
-        if (!dashSelectedModFilter.empty() && std::find(uniqueMods.begin(), uniqueMods.end(), dashSelectedModFilter) == uniqueMods.end()) {
-            dashSelectedModFilter = "";
-        }
-
-        ImGuiMCP::TextColored({ 0.5f, 0.8f, 1.0f, 1.0f }, "Search Filters:");
+        ImGuiMCP::TextColored({ 0.5f, 0.8f, 1.0f, 1.0f }, "%s", GetLoc("common.filters", "Search Filters:"));
         ImGuiMCP::PushItemWidth(180.0f);
 
-        ImGuiMCP::InputText("Name##dash", dashFilterName, sizeof(dashFilterName));
+        ImGuiMCP::InputText(GetLoc("common.name", "Name"), dashFilterName, sizeof(dashFilterName));
         ImGuiMCP::SameLine();
 
-        if (ImGuiMCP::BeginCombo("Key##dash", dashSelectedKeyFilter.empty() ? "All Keys" : dashSelectedKeyFilter.c_str())) {
+        if (ImGuiMCP::BeginCombo(GetLoc("common.key", "Key"), dashSelectedKeyFilter.empty() ? GetLoc("dash.all_keys", "All Keys") : dashSelectedKeyFilter.c_str())) {
             ImGuiMCP::InputText("Search##dashKeySearch", dashKeySearchBuf, sizeof(dashKeySearchBuf));
             std::string searchLower = ToLower(dashKeySearchBuf);
             ImGuiMCP::Separator();
 
-            if (ImGuiMCP::Selectable("All Keys", dashSelectedKeyFilter.empty())) {
-                dashSelectedKeyFilter = "";
-            }
+            if (ImGuiMCP::Selectable(GetLoc("dash.all_keys", "All Keys"), dashSelectedKeyFilter.empty())) dashSelectedKeyFilter = "";
 
             for (size_t k = 1; k < std::size(pcKeyNames); ++k) {
                 std::string kName = pcKeyNames[k];
                 if (searchLower.empty() || ToLower(kName).find(searchLower) != std::string::npos) {
-                    if (ImGuiMCP::Selectable((kName + " (PC)").c_str(), dashSelectedKeyFilter == kName + " (PC)")) {
-                        dashSelectedKeyFilter = kName + " (PC)";
-                    }
+                    if (ImGuiMCP::Selectable((kName + " (PC)").c_str(), dashSelectedKeyFilter == kName + " (PC)")) dashSelectedKeyFilter = kName + " (PC)";
                 }
             }
             for (size_t k = 1; k < std::size(gamepadKeyNames); ++k) {
                 std::string kName = gamepadKeyNames[k];
                 if (searchLower.empty() || ToLower(kName).find(searchLower) != std::string::npos) {
-                    if (ImGuiMCP::Selectable((kName + " (PAD)").c_str(), dashSelectedKeyFilter == kName + " (PAD)")) {
-                        dashSelectedKeyFilter = kName + " (PAD)";
-                    }
+                    if (ImGuiMCP::Selectable((kName + " (PAD)").c_str(), dashSelectedKeyFilter == kName + " (PAD)")) dashSelectedKeyFilter = kName + " (PAD)";
                 }
             }
             ImGuiMCP::EndCombo();
         }
         ImGuiMCP::SameLine();
 
-        if (ImGuiMCP::BeginCombo("Mod##dash", dashSelectedModFilter.empty() ? "All Mods" : dashSelectedModFilter.c_str())) {
+        if (ImGuiMCP::BeginCombo(GetLoc("common.mod", "Mod"), dashSelectedModFilter.empty() ? GetLoc("dash.all_mods", "All Mods") : dashSelectedModFilter.c_str())) {
             ImGuiMCP::InputText("Search##dashModSearch", dashModSearchBuf, sizeof(dashModSearchBuf));
             std::string modSearchLower = ToLower(dashModSearchBuf);
             ImGuiMCP::Separator();
 
-            if (ImGuiMCP::Selectable("All Mods", dashSelectedModFilter.empty())) {
-                dashSelectedModFilter = "";
-            }
+            if (ImGuiMCP::Selectable(GetLoc("dash.all_mods", "All Mods"), dashSelectedModFilter.empty())) dashSelectedModFilter = "";
             if (uniqueMods.empty()) {
-                ImGuiMCP::TextDisabled("No mods connected at the moment");
+                ImGuiMCP::TextDisabled("%s", GetLoc("dash.no_mods", "No mods connected at the moment"));
             }
             else {
                 for (const auto& modName : uniqueMods) {
                     if (modSearchLower.empty() || ToLower(modName).find(modSearchLower) != std::string::npos) {
-                        if (ImGuiMCP::Selectable(modName.c_str(), dashSelectedModFilter == modName)) {
-                            dashSelectedModFilter = modName;
-                        }
+                        if (ImGuiMCP::Selectable(modName.c_str(), dashSelectedModFilter == modName)) dashSelectedModFilter = modName;
                     }
                 }
             }
@@ -1240,85 +1259,48 @@ namespace ActionMenuUI {
         for (size_t i = 0; i < actionList.size(); ++i) {
             const auto& action = actionList[i];
             if (action.pcMainKey == 0 && action.gamepadMainKey == 0) continue;
+            if (!lowerDashFilterName.empty() && ToLower(action.name).find(lowerDashFilterName) == std::string::npos) continue;
 
-            // Aplica filtro de Nome
-            if (!lowerDashFilterName.empty() && ToLower(action.name).find(lowerDashFilterName) == std::string::npos) {
-                continue;
-            }
-
-            // Aplica filtro de Mod
             bool modMatch = dashSelectedModFilter.empty();
             if (!dashSelectedModFilter.empty()) {
                 for (const auto& l : listeners) {
-                    if (l.actionID == static_cast<int>(i) && l.modName == dashSelectedModFilter) {
-                        modMatch = true;
-                        break;
-                    }
+                    if (l.actionID == static_cast<int>(i) && l.modName == dashSelectedModFilter) { modMatch = true; break; }
                 }
             }
             if (!modMatch) continue;
 
             auto addKey = [&](const std::string& keyName) {
                 if (!keyName.empty() && keyName != "None") {
-                    // Aplica filtro de Key
                     if (!dashSelectedKeyFilter.empty() && keyName != dashSelectedKeyFilter) return;
-
                     auto& vec = keyUsageMap[keyName].actionIDs;
-                    if (std::find(vec.begin(), vec.end(), static_cast<int>(i)) == vec.end()) {
-                        vec.push_back(static_cast<int>(i));
-                    }
+                    if (std::find(vec.begin(), vec.end(), static_cast<int>(i)) == vec.end()) vec.push_back(static_cast<int>(i));
                 }
                 };
 
-            if (action.pcMainKey != 0) {
-                int idx = GetIndexFromID(action.pcMainKey, pcKeyIDs, std::size(pcKeyIDs));
-                addKey(std::string(pcKeyNames[idx]) + " (PC)");
-            }
-            if (action.pcModifierKey != 0) {
-                int idx = GetIndexFromID(action.pcModifierKey, pcKeyIDs, std::size(pcKeyIDs));
-                addKey(std::string(pcKeyNames[idx]) + " (PC)");
-            }
-            if (action.gamepadMainKey != 0) {
-                int idx = GetIndexFromID(action.gamepadMainKey, gamepadKeyIDs, std::size(gamepadKeyIDs));
-                addKey(std::string(gamepadKeyNames[idx]) + " (PAD)");
-            }
-            if (action.gamepadModifierKey != 0) {
-                int idx = GetIndexFromID(action.gamepadModifierKey, gamepadKeyIDs, std::size(gamepadKeyIDs));
-                addKey(std::string(gamepadKeyNames[idx]) + " (PAD)");
-            }
+            if (action.pcMainKey != 0) addKey(std::string(pcKeyNames[GetIndexFromID(action.pcMainKey, pcKeyIDs, std::size(pcKeyIDs))]) + " (PC)");
+            if (action.pcModifierKey != 0) addKey(std::string(pcKeyNames[GetIndexFromID(action.pcModifierKey, pcKeyIDs, std::size(pcKeyIDs))]) + " (PC)");
+            if (action.gamepadMainKey != 0) addKey(std::string(gamepadKeyNames[GetIndexFromID(action.gamepadMainKey, gamepadKeyIDs, std::size(gamepadKeyIDs))]) + " (PAD)");
+            if (action.gamepadModifierKey != 0) addKey(std::string(gamepadKeyNames[GetIndexFromID(action.gamepadModifierKey, gamepadKeyIDs, std::size(gamepadKeyIDs))]) + " (PAD)");
         }
 
         for (size_t i = 0; i < motionList.size(); ++i) {
             const auto& motion = motionList[i];
             if (motion.pcSequence.empty() && motion.padSequence.empty()) continue;
+            if (!lowerDashFilterName.empty() && ToLower(motion.name).find(lowerDashFilterName) == std::string::npos) continue;
 
-            // Aplica filtro de Nome
-            if (!lowerDashFilterName.empty() && ToLower(motion.name).find(lowerDashFilterName) == std::string::npos) {
-                continue;
-            }
-
-            // Aplica filtro de Mod
             bool modMatch = dashSelectedModFilter.empty();
             if (!dashSelectedModFilter.empty()) {
                 for (const auto& l : motionListeners) {
-                    if (l.actionID == static_cast<int>(i) && l.modName == dashSelectedModFilter) {
-                        modMatch = true;
-                        break;
-                    }
+                    if (l.actionID == static_cast<int>(i) && l.modName == dashSelectedModFilter) { modMatch = true; break; }
                 }
             }
             if (!modMatch) continue;
 
             auto addMotionKey = [&](uint32_t keyID, bool isPad) {
                 std::string keyName = FormatMotionKey(keyID) + (isPad ? " (PAD)" : " (PC)");
-
-                // Aplica filtro de Key
                 if (!dashSelectedKeyFilter.empty() && keyName != dashSelectedKeyFilter) return;
-
                 auto& vec = keyUsageMap[keyName].motionIDs;
-                if (std::find(vec.begin(), vec.end(), static_cast<int>(i)) == vec.end()) {
-                    vec.push_back(static_cast<int>(i));
-                }
+                if (std::find(vec.begin(), vec.end(), static_cast<int>(i)) == vec.end()) vec.push_back(static_cast<int>(i));
                 };
 
             for (uint32_t k : motion.pcSequence) addMotionKey(k, false);
@@ -1326,22 +1308,19 @@ namespace ActionMenuUI {
         }
 
         if (keyUsageMap.empty()) {
-            ImGuiMCP::TextDisabled("No results match the selected filters.");
+            ImGuiMCP::TextDisabled("%s", GetLoc("dash.no_results", "No results match the selected filters."));
             return;
         }
 
         if (ImGuiMCP::BeginTable("SummaryTable", 4, ImGuiMCP::ImGuiTableFlags_Borders | ImGuiMCP::ImGuiTableFlags_RowBg | ImGuiMCP::ImGuiTableFlags_Resizable)) {
-            ImGuiMCP::TableSetupColumn("Action / ID", ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, 180.0f);
-            ImGuiMCP::TableSetupColumn("Keys and Combos", ImGuiMCP::ImGuiTableColumnFlags_WidthStretch);
-            ImGuiMCP::TableSetupColumn("Timings", ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, 130.0f);
-            ImGuiMCP::TableSetupColumn("Connected Mods", ImGuiMCP::ImGuiTableColumnFlags_WidthStretch);
+            ImGuiMCP::TableSetupColumn(GetLoc("dash.col_action", "Action / ID"), ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, 180.0f);
+            ImGuiMCP::TableSetupColumn(GetLoc("dash.col_keys", "Keys and Combos"), ImGuiMCP::ImGuiTableColumnFlags_WidthStretch);
+            ImGuiMCP::TableSetupColumn(GetLoc("dash.col_timings", "Timings"), ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, 130.0f);
+            ImGuiMCP::TableSetupColumn(GetLoc("common.connected_mods", "Connected Mods"), ImGuiMCP::ImGuiTableColumnFlags_WidthStretch);
             ImGuiMCP::TableHeadersRow();
 
             for (const auto& pair : keyUsageMap) {
                 const std::string& keyName = pair.first;
-                const std::vector<int>& actionIDs = pair.second.actionIDs;
-                const std::vector<int>& motionIDs = pair.second.motionIDs;
-
                 ImGuiMCP::TableNextRow();
                 ImGuiMCP::TableSetColumnIndex(0);
 
@@ -1350,10 +1329,8 @@ namespace ActionMenuUI {
                 ImGuiMCP::PopStyleColor();
 
                 if (isNodeOpen) {
-
-                    for (int actionID : actionIDs) {
+                    for (int actionID : pair.second.actionIDs) {
                         const auto& action = actionList[actionID];
-
                         ImGuiMCP::TableNextRow();
                         ImGuiMCP::TableSetColumnIndex(0);
                         ImGuiMCP::Indent();
@@ -1364,7 +1341,7 @@ namespace ActionMenuUI {
                         ImGuiMCP::TextWrapped("%s", GetActionSummary(action).c_str());
 
                         ImGuiMCP::TableSetColumnIndex(2);
-                        ImGuiMCP::Text("Window: %.2fs\nHold: %.2fs", action.tapWindow, action.holdDuration);
+                        ImGuiMCP::Text("%s: %.2fs\n%s: %.2fs", GetLoc("action.tap_window", "Window"), action.tapWindow, GetLoc("action.hold_time", "Hold"), action.holdDuration);
 
                         ImGuiMCP::TableSetColumnIndex(3);
                         bool hasMod = false;
@@ -1374,34 +1351,33 @@ namespace ActionMenuUI {
                                 hasMod = true;
                             }
                         }
-                        if (!hasMod) ImGuiMCP::TextDisabled("None");
+                        if (!hasMod) ImGuiMCP::TextDisabled("%s", GetLoc("common.none", "None"));
                     }
 
-                    for (int motionID : motionIDs) {
+                    for (int motionID : pair.second.motionIDs) {
                         const auto& motion = motionList[motionID];
-
                         ImGuiMCP::TableNextRow();
                         ImGuiMCP::TableSetColumnIndex(0);
                         ImGuiMCP::Indent();
-                        ImGuiMCP::TextColored({ 0.9f, 0.7f, 0.3f, 1.0f }, "Motion ID: %d", motionID);
+                        ImGuiMCP::TextColored({ 0.9f, 0.7f, 0.3f, 1.0f }, "%s: %d", GetLoc("common.motion_id", "Motion ID"), motionID);
                         ImGuiMCP::TextColored({ 0.7f, 0.7f, 0.7f, 1.0f }, "%s", motion.name);
                         ImGuiMCP::Unindent();
 
                         ImGuiMCP::TableSetColumnIndex(1);
                         std::string seqSummary = "";
                         if (!motion.pcSequence.empty()) {
-                            seqSummary += "PC: ";
+                            seqSummary += GetLoc("common.pc", "PC") + std::string(": ");
                             for (uint32_t k : motion.pcSequence) seqSummary += "[" + FormatMotionKey(k) + "] ";
                         }
                         if (!motion.padSequence.empty()) {
                             if (!seqSummary.empty()) seqSummary += "  |  ";
-                            seqSummary += "PAD: ";
+                            seqSummary += GetLoc("common.pad", "PAD") + std::string(": ");
                             for (uint32_t k : motion.padSequence) seqSummary += "[" + FormatMotionKey(k) + "] ";
                         }
-                        ImGuiMCP::TextWrapped("%s", seqSummary.empty() ? "None" : seqSummary.c_str());
+                        ImGuiMCP::TextWrapped("%s", seqSummary.empty() ? GetLoc("common.none", "None") : seqSummary.c_str());
 
                         ImGuiMCP::TableSetColumnIndex(2);
-                        ImGuiMCP::Text("Time Window: %.2fs", motion.timeWindow);
+                        ImGuiMCP::Text("%s: %.2fs", GetLoc("action.tap_window", "Window"), motion.timeWindow);
 
                         ImGuiMCP::TableSetColumnIndex(3);
                         bool hasMod = false;
@@ -1411,9 +1387,8 @@ namespace ActionMenuUI {
                                 hasMod = true;
                             }
                         }
-                        if (!hasMod) ImGuiMCP::TextDisabled("None");
+                        if (!hasMod) ImGuiMCP::TextDisabled("%s", GetLoc("common.none", "None"));
                     }
-
                     ImGuiMCP::TreePop();
                 }
             }
@@ -1422,17 +1397,15 @@ namespace ActionMenuUI {
     }
 
     inline void RenderDashboardMenu() {
-        ImGuiMCP::Text("Input Manager - Dashboard");
+        ImGuiMCP::Text("%s", GetLoc("dash.header", "Input Manager - Dashboard"));
         ImGuiMCP::Separator(); ImGuiMCP::Spacing();
-
         auto listeners = PluginLogic::KeyManager::GetSingleton()->GetListeners();
-        auto motionListeners = PluginLogic::KeyManager::GetSingleton()->GetMotionListeners(); 
-
-        RenderSummaryDashboard(listeners, motionListeners); 
+        auto motionListeners = PluginLogic::KeyManager::GetSingleton()->GetMotionListeners();
+        RenderSummaryDashboard(listeners, motionListeners);
     }
 
     inline void RenderGesturesMenu() {
-        ImGuiMCP::Text("Input Manager - Gestures and Movements (Beta)");
+        ImGuiMCP::Text("%s", GetLoc("gesture.title", "Input Manager - Gestures and Movements (Beta)"));
         ImGuiMCP::Separator(); ImGuiMCP::Spacing();
 
         bool hasGestureConflict = false;
@@ -1441,7 +1414,7 @@ namespace ActionMenuUI {
             for (size_t j = i + 1; j < movementList.size(); ++j) {
                 if (SanitizeFileName(movementList[i].name) == SanitizeFileName(movementList[j].name)) {
                     hasGestureConflict = true;
-                    gestureErrorMsg = "DUPLICATE NAME: Gestures '" + std::string(movementList[i].name) + "' and '" + std::string(movementList[j].name) + "' conflict. Please choose unique names.";
+                    gestureErrorMsg = GetLoc("error.dup_gesture", "DUPLICATE NAME: Gestures conflict. Please choose unique names.");
                     break;
                 }
             }
@@ -1449,32 +1422,29 @@ namespace ActionMenuUI {
         }
 
         if (hasGestureConflict) {
-            ImGuiMCP::TextColored({ 1.0f, 0.2f, 0.2f, 1.0f }, "[CONFIGURATION ERROR]");
+            ImGuiMCP::TextColored({ 1.0f, 0.2f, 0.2f, 1.0f }, "%s", GetLoc("error.conflict_title", "[CONFIGURATION ERROR]"));
             ImGuiMCP::TextColored({ 1.0f, 0.8f, 0.2f, 1.0f }, "%s", gestureErrorMsg.c_str());
-            ImGuiMCP::TextColored({ 0.7f, 0.7f, 0.7f, 1.0f }, "Resolve the duplication by changing the gesture's name.");
+            ImGuiMCP::TextColored({ 0.7f, 0.7f, 0.7f, 1.0f }, "%s", GetLoc("error.resolve_gesture", "Resolve the duplication by changing the gesture's name."));
             ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
         }
 
-
         ImGuiMCP::BeginDisabled(hasGestureConflict);
-
         ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_Button, { 0.1f, 0.5f, 0.1f, 1.0f });
         ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_ButtonHovered, { 0.2f, 0.6f, 0.2f, 1.0f });
         ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_ButtonActive, { 0.1f, 0.4f, 0.1f, 1.0f });
 
-        if (ImGuiMCP::Button("Save and Apply Gestures")) {
+        if (ImGuiMCP::Button(GetLoc("gesture.save_btn", "Save and Apply Gestures"))) {
             SaveSettingsToJson();
             SaveGesturesToJson();
         }
 
         ImGuiMCP::PopStyleColor(3);
-
         ImGuiMCP::EndDisabled();
 
         ImGuiMCP::SameLine();
-        if (ImGuiMCP::Button("Add New Gesture")) {
+        if (ImGuiMCP::Button(GetLoc("gesture.add_btn", "Add New Gesture"))) {
             MovementEntry newGesture;
-            std::string baseName = "New Gesture";
+            std::string baseName = GetLoc("gesture.default_name", "New Gesture");
             std::string finalName = baseName;
             int counter = 1;
 
@@ -1482,26 +1452,19 @@ namespace ActionMenuUI {
             while (exists) {
                 exists = false;
                 for (const auto& g : movementList) {
-                    if (std::string(g.name) == finalName) {
-                        exists = true;
-                        break;
-                    }
+                    if (std::string(g.name) == finalName) { exists = true; break; }
                 }
                 if (exists) {
                     finalName = baseName + " " + std::to_string(counter);
                     counter++;
                 }
             }
-
             strncpy_s(newGesture.name, finalName.c_str(), sizeof(newGesture.name) - 1);
             movementList.push_back(newGesture);
         }
         ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
 
-        ImGuiMCP::Checkbox("Show Gesture Trail in Game (Overlay)", &showGestureTrail);
-        if (ImGuiMCP::IsItemHovered()) {
-            ImGuiMCP::SetTooltip("Draws a blue line on the screen while the gesture shortcut is pressed.\nFor this to work, remember to call ActionMenuUI::RenderGestureTrailOverlay()\nin your main ImGui hook (OnPresent).");
-        }
+        ImGuiMCP::Checkbox(GetLoc("gesture.show_trail", "Show Gesture Trail in Game (Overlay)"), &showGestureTrail);
 
         ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
 
@@ -1514,55 +1477,40 @@ namespace ActionMenuUI {
         bool isCapturing = (recordingIndex != -1 || testingIndex != -1);
 
         if (isCapturing) {
-            ImGuiMCP::TextColored({ 1.0f, 0.5f, 0.0f, 1.0f }, ">>> GESTURE CAPTURE MODE <<<");
+            ImGuiMCP::TextColored({ 1.0f, 0.5f, 0.0f, 1.0f }, "%s", GetLoc("gesture.capture_mode", ">>> GESTURE CAPTURE MODE <<<"));
 
             if (isWaitingForEnter) {
-                ImGuiMCP::Text("Position the mouse where desired and press [ENTER] to START recording.");
-                if (ImGuiMCP::IsKeyPressed(ImGuiMCP::ImGuiKey_Enter)) {
-                    isWaitingForEnter = false; 
-                }
+                ImGuiMCP::Text("%s", GetLoc("gesture.press_enter", "Position the mouse where desired and press [ENTER] to START recording."));
+                if (ImGuiMCP::IsKeyPressed(ImGuiMCP::ImGuiKey_Enter)) isWaitingForEnter = false;
             }
             else {
-                ImGuiMCP::TextColored({ 1.0f, 0.2f, 0.2f, 1.0f }, "[RECORDING] Move the mouse. Press [ENTER] again to FINISH.");
+                ImGuiMCP::TextColored({ 1.0f, 0.2f, 0.2f, 1.0f }, "%s", GetLoc("gesture.recording", "[RECORDING] Move the mouse. Press [ENTER] again to FINISH."));
 
                 auto io = ImGuiMCP::GetIO();
                 float mouseX = io->MousePos.x;
                 float mouseY = io->MousePos.y;
 
-                if (tempPoints.empty()) {
-                    tempPoints.push_back({ mouseX, mouseY });
-                }
+                if (tempPoints.empty()) tempPoints.push_back({ mouseX, mouseY });
                 else {
                     float dx = mouseX - tempPoints.back().x;
                     float dy = mouseY - tempPoints.back().y;
-                    if (dx * dx + dy * dy > 4.0f) {
-                        tempPoints.push_back({ mouseX, mouseY });
-                    }
+                    if (dx * dx + dy * dy > 4.0f) tempPoints.push_back({ mouseX, mouseY });
                 }
 
                 if (tempPoints.size() > 1) {
-                    ImGuiMCP::ImVec2 oldPos;
-                    ImGuiMCP::GetCursorScreenPos(&oldPos); // Salva a posição exata da UI antes de desenhar
+                    ImGuiMCP::ImVec2 oldPos; ImGuiMCP::GetCursorScreenPos(&oldPos);
                     ImGuiMCP::ImDrawList* draw_list = ImGuiMCP::GetWindowDrawList();
                     size_t totalPoints = tempPoints.size();
                     for (size_t i = 1; i < totalPoints; ++i) {
                         ImGuiMCP::ImVec2 p1 = { tempPoints[i - 1].x, tempPoints[i - 1].y };
                         ImGuiMCP::ImVec2 p2 = { tempPoints[i].x, tempPoints[i].y };
-
-                        // 2. Calcula a cor (Gradiente dinâmico como no seu original)
                         float progress = (float)i / (totalPoints - 1);
-                        // Assumindo que você tem acesso ao namespace ImGui nativo para pegar a cor:
                         ImGuiMCP::ImU32 lineColor = ImGuiMCP::GetColorU32({ progress, 1.0f - progress, 0.0f, 1.0f });
-
-                        float thickness = 3.0f; // Ajuste a grossura da linha aqui
-
-                        // 3. PASSE O DRAW_LIST COMO O PRIMEIRO ARGUMENTO
-                        ImGuiMCP::ImDrawListManager::AddLine(draw_list, p1, p2, lineColor, thickness);
+                        ImGuiMCP::ImDrawListManager::AddLine(draw_list, p1, p2, lineColor, 3.0f);
                     }
-                    ImGuiMCP::SetCursorScreenPos(oldPos); // Restaura o cursor!
+                    ImGuiMCP::SetCursorScreenPos(oldPos);
                 }
 
-                // When Enter is pressed for the SECOND TIME, it saves and finishes
                 if (ImGuiMCP::IsKeyPressed(ImGuiMCP::ImGuiKey_Enter)) {
                     if (recordingIndex != -1) {
                         movementList[recordingIndex].rawPoints = tempPoints;
@@ -1572,13 +1520,9 @@ namespace ActionMenuUI {
                         std::vector<GestureMath::Point2D> testNorm = GestureMath::NormalizeGesture(tempPoints);
                         lastScore = GestureMath::GetMatchScore(movementList[testingIndex].normalizedPoints, testNorm);
                     }
-
-                    recordingIndex = -1;
-                    testingIndex = -1;
-                    tempPoints.clear();
+                    recordingIndex = -1; testingIndex = -1; tempPoints.clear();
                 }
             }
-
             ImGuiMCP::BeginDisabled();
         }
 
@@ -1591,131 +1535,79 @@ namespace ActionMenuUI {
 
             if (ImGuiMCP::CollapsingHeader(headerLabel.c_str())) {
                 ImGuiMCP::PopStyleColor();
-                ImGuiMCP::Indent();
+                ImGuiMCP::Indent(); ImGuiMCP::Spacing();
+
+                ImGuiMCP::InputText(GetLoc("common.name", "Name"), gesture.name, sizeof(gesture.name));
                 ImGuiMCP::Spacing();
 
-                ImGuiMCP::InputText("Gesture Name", gesture.name, sizeof(gesture.name));
-
-                // --- INÍCIO: SISTEMA DE REORDENAMENTO (MUDAR ID) ---
-                ImGuiMCP::Spacing();
                 int currentId = static_cast<int>(i);
                 ImGuiMCP::PushItemWidth(200.0f);
-                if (ImGuiMCP::InputInt("Gesture ID", &currentId, 1, 10, ImGuiMCP::ImGuiInputTextFlags_EnterReturnsTrue)) {
-                    if (currentId >= 0 && currentId < static_cast<int>(movementList.size()) && currentId != i) {
-                        std::swap(movementList[i], movementList[currentId]);
-                    }
+                if (ImGuiMCP::InputInt(GetLoc("common.id", "ID"), &currentId, 1, 10, ImGuiMCP::ImGuiInputTextFlags_EnterReturnsTrue)) {
+                    if (currentId >= 0 && currentId < static_cast<int>(movementList.size()) && currentId != i) std::swap(movementList[i], movementList[currentId]);
                 }
                 ImGuiMCP::PopItemWidth();
-                if (ImGuiMCP::IsItemHovered()) ImGuiMCP::SetTooltip("Type the ID and press ENTER to swap gestures.");
                 ImGuiMCP::SameLine();
 
                 ImGuiMCP::BeginDisabled(i == 0);
-                if (ImGuiMCP::Button("Move Up##gest")) std::swap(movementList[i], movementList[i - 1]);
+                if (ImGuiMCP::Button(GetLoc("common.move_up", "Move Up"))) std::swap(movementList[i], movementList[i - 1]);
                 ImGuiMCP::EndDisabled();
                 ImGuiMCP::SameLine();
 
                 ImGuiMCP::BeginDisabled(i == movementList.size() - 1);
-                if (ImGuiMCP::Button("Move Down##gest")) std::swap(movementList[i], movementList[i + 1]);
+                if (ImGuiMCP::Button(GetLoc("common.move_down", "Move Down"))) std::swap(movementList[i], movementList[i + 1]);
                 ImGuiMCP::EndDisabled();
 
                 ImGuiMCP::Spacing();
-                ImGuiMCP::SliderFloat("Required Accuracy", &gesture.requiredAccuracy, 0.50f, 0.99f, "%.2f");
+                ImGuiMCP::SliderFloat(GetLoc("gesture.accuracy", "Required Accuracy"), &gesture.requiredAccuracy, 0.50f, 0.99f, "%.2f");
                 ImGuiMCP::Spacing();
 
-                ImGuiMCP::Text("Recorded Drawing (Preview):");
+                ImGuiMCP::Text("%s", GetLoc("gesture.preview", "Recorded Drawing (Preview):"));
                 if (!gesture.normalizedPoints.empty()) {
-                    ImGuiMCP::ImVec2 p0;
-                    ImGuiMCP::GetCursorScreenPos(&p0);
+                    ImGuiMCP::ImVec2 p0; ImGuiMCP::GetCursorScreenPos(&p0);
                     ImGuiMCP::Dummy({ 240.0f, 240.0f });
-                    ImGuiMCP::ImVec2 pEnd;
-                    ImGuiMCP::GetCursorScreenPos(&pEnd);
-                    float minX = 99999.0f, maxX = -99999.0f;
-                    float minY = 99999.0f, maxY = -99999.0f;
+                    ImGuiMCP::ImVec2 pEnd; ImGuiMCP::GetCursorScreenPos(&pEnd);
+                    float minX = 99999.0f, maxX = -99999.0f, minY = 99999.0f, maxY = -99999.0f;
 
-                    // Encontra os limites extremos do desenho
                     for (const auto& p : gesture.normalizedPoints) {
-                        if (p.x < minX) minX = p.x;
-                        if (p.x > maxX) maxX = p.x;
-                        if (p.y < minY) minY = p.y;
-                        if (p.y > maxY) maxY = p.y;
+                        if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+                        if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
                     }
 
-                    float rangeX = maxX - minX;
-                    float rangeY = maxY - minY;
-                    // Previne divisão por zero caso seja um ponto único
-                    if (rangeX < 0.001f) rangeX = 0.001f;
-                    if (rangeY < 0.001f) rangeY = 0.001f;
-
-                    // Pega na maior dimensão para não distorcer a proporção
+                    float rangeX = std::max(maxX - minX, 0.001f);
+                    float rangeY = std::max(maxY - minY, 0.001f);
                     float maxRange = std::max(rangeX, rangeY);
-
-                    // Escala personalizada: O desenho vai caber sempre em 160px (com margem dentro dos 240px)
                     float scale = 160.0f / maxRange;
 
-                    // Centro geométrico do Canvas de 240x240
-                    float centerX = p0.x + 120.0f;
-                    float centerY = p0.y + 120.0f;
+                    float centerX = p0.x + 120.0f; float centerY = p0.y + 120.0f;
+                    float midX = minX + (rangeX * 0.5f); float midY = minY + (rangeY * 0.5f);
 
-                    // Centro matemático do desenho
-                    float midX = minX + (rangeX * 0.5f);
-                    float midY = minY + (rangeY * 0.5f);
-
-                    // 4. Desenha as linhas perfeitamente centralizadas e escaladas
                     size_t totalPoints = gesture.normalizedPoints.size();
-
                     if (totalPoints > 1) {
-                        // Obtém a lista de desenho (caso não tenha pego no início do escopo)
                         ImGuiMCP::ImDrawList* draw_list = ImGuiMCP::GetWindowDrawList();
-
                         for (size_t j = 1; j < totalPoints; ++j) {
-                            auto p1 = gesture.normalizedPoints[j - 1];
-                            auto p2 = gesture.normalizedPoints[j];
+                            auto p1 = gesture.normalizedPoints[j - 1]; auto p2 = gesture.normalizedPoints[j];
+                            float x1 = centerX + ((p1.x - midX) * scale); float y1 = centerY + ((p1.y - midY) * scale);
+                            float x2 = centerX + ((p2.x - midX) * scale); float y2 = centerY + ((p2.y - midY) * scale);
 
-                            // Aplica a escala dinâmica centralizando a partir do midX e midY
-                            float x1 = centerX + ((p1.x - midX) * scale);
-                            float y1 = centerY + ((p1.y - midY) * scale);
-                            float x2 = centerX + ((p2.x - midX) * scale);
-                            float y2 = centerY + ((p2.y - midY) * scale);
-
-                            // Converte as coordenadas escaladas para ImVec2
-                            ImGuiMCP::ImVec2 vec1 = { x1, y1 };
-                            ImGuiMCP::ImVec2 vec2 = { x2, y2 };
-
-                            // Calcula o progresso para o gradiente de cor (Verde para Vermelho, ou vice-versa)
                             float progress = (float)j / (totalPoints - 1);
-
-                            // Cria a cor. Note que usamos o ImGui nativo para converter o ImVec4 para ImU32
                             ImGuiMCP::ImU32 lineColor = ImGuiMCP::GetColorU32({ progress, 1.0f - progress, 0.0f, 1.0f });
-
-                            // Define a espessura da linha
-                            float thickness = 3.0f;
-
-                            // Desenha a linha contínua
-                            ImGuiMCP::ImDrawListManager::AddLine(draw_list, vec1, vec2, lineColor, thickness);
+                            ImGuiMCP::ImDrawListManager::AddLine(draw_list, { x1, y1 }, { x2, y2 }, lineColor, 3.0f);
                         }
                     }
                     ImGuiMCP::SetCursorScreenPos(pEnd);
                 }
                 else {
-                    ImGuiMCP::TextColored({ 0.6f, 0.6f, 0.6f, 1.0f }, "[ NO GESTURE RECORDED ]");
+                    ImGuiMCP::TextColored({ 0.6f, 0.6f, 0.6f, 1.0f }, "%s", GetLoc("gesture.no_record", "[ NO GESTURE RECORDED ]"));
                 }
 
                 ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
 
-                if (ImGuiMCP::Button("Record Movement")) {
-                    recordingIndex = static_cast<int>(i);
-                    testingIndex = -1;
-                    tempPoints.clear();
-                    lastScore = -1.0f;
-                    isWaitingForEnter = true;
+                if (ImGuiMCP::Button(GetLoc("gesture.rec_btn", "Record Movement"))) {
+                    recordingIndex = static_cast<int>(i); testingIndex = -1; tempPoints.clear(); lastScore = -1.0f; isWaitingForEnter = true;
                 }
                 ImGuiMCP::SameLine();
-                if (ImGuiMCP::Button("Validate Movement (Test)")) {
-                    testingIndex = static_cast<int>(i);
-                    recordingIndex = -1;
-                    tempPoints.clear();
-                    lastScore = -1.0f;
-                    isWaitingForEnter = true;
+                if (ImGuiMCP::Button(GetLoc("gesture.test_btn", "Validate Movement (Test)"))) {
+                    testingIndex = static_cast<int>(i); recordingIndex = -1; tempPoints.clear(); lastScore = -1.0f; isWaitingForEnter = true;
                 }
 
                 if (lastScore >= 0.0f && testingIndex == -1 && recordingIndex == -1) {
@@ -1728,24 +1620,9 @@ namespace ActionMenuUI {
                     }
                 }
 
-                std::vector<std::string> connectedActions;
-                for (const auto& act : actionList) {
-                    if ((act.pcMainKey != 0 && act.pcModAction == 3 && act.gestureIndex == static_cast<int>(i)) ||
-                        (act.gamepadMainKey != 0 && act.gamepadModAction == 3 && act.gestureIndex == static_cast<int>(i))) {
-                        connectedActions.push_back(act.name);
-                    }
-                }
-                if (!connectedActions.empty()) {
-                    ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
-                    ImGuiMCP::TextColored({ 0.9f, 0.6f, 1.0f, 1.0f }, "Actions using this Gesture:");
-                    for (const auto& actName : connectedActions) {
-                        ImGuiMCP::BulletText("%s", actName.c_str());
-                    }
-                }
-
                 ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
                 ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_Button, { 0.6f, 0.2f, 0.2f, 1.0f });
-                if (ImGuiMCP::Button("Delete Gesture")) {
+                if (ImGuiMCP::Button(GetLoc("common.delete", "Delete"))) {
                     movementList.erase(movementList.begin() + i);
                     ImGuiMCP::PopStyleColor();
                     ImGuiMCP::Unindent();
@@ -1753,19 +1630,12 @@ namespace ActionMenuUI {
                     break;
                 }
                 ImGuiMCP::PopStyleColor();
-
-                ImGuiMCP::Unindent();
-                ImGuiMCP::Spacing();
+                ImGuiMCP::Unindent(); ImGuiMCP::Spacing();
             }
-            else {
-                ImGuiMCP::PopStyleColor();
-            }
+            else { ImGuiMCP::PopStyleColor(); }
             ImGuiMCP::PopID();
         }
-
-        if (isCapturing) {
-            ImGuiMCP::EndDisabled();
-        }
+        if (isCapturing) ImGuiMCP::EndDisabled();
     }
 
     inline bool HasConflicts(std::string& outErrorMsg) {
@@ -1896,34 +1766,34 @@ namespace ActionMenuUI {
     }
 
     inline void RenderMenu() {
-        ImGuiMCP::Text("Input Manager");
+        ImGuiMCP::Text("%s", GetLoc("action.title", "Input Manager - Actions"));
         ImGuiMCP::Separator(); ImGuiMCP::Spacing();
 
-        ImGuiMCP::Checkbox("Advanced Mode (Disable Safe Guards)", &advancedMode);
+        ImGuiMCP::Checkbox(GetLoc("action.adv_mode", "Advanced Mode (Disable Safe Guards)"), &advancedMode);
         if (!advancedMode) {
             EnforceSafeGuards();
             ImGuiMCP::SameLine();
-            ImGuiMCP::TextColored({ 0.5f, 1.0f, 0.5f, 1.0f }, " (Safe Guards Active: Preventing logic conflicts)");
+            ImGuiMCP::TextColored({ 0.5f, 1.0f, 0.5f, 1.0f }, "%s", GetLoc("action.safe_on", " (Safe Guards Active: Preventing logic conflicts)"));
         }
         else {
             ImGuiMCP::SameLine();
-            ImGuiMCP::TextColored({ 1.0f, 0.5f, 0.5f, 1.0f }, " (WARNING: Safe Guards Disabled. Risk of breaking!)");
+            ImGuiMCP::TextColored({ 1.0f, 0.5f, 0.5f, 1.0f }, "%s", GetLoc("action.safe_off", " (WARNING: Safe Guards Disabled. Risk of breaking!)"));
         }
 
         ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
 
-        ImGuiMCP::TextColored({ 0.8f, 0.8f, 0.5f, 1.0f }, "Global Timings Defaults");
-        ImGuiMCP::SliderFloat("Global Tap Window", &globalTapWindow, 0.01f, 1.0f, "%.2f s");
-        ImGuiMCP::SliderFloat("Global Hold Duration", &globalHoldDuration, 0.01f, 2.0f, "%.2f s");
+        ImGuiMCP::TextColored({ 0.8f, 0.8f, 0.5f, 1.0f }, "%s", GetLoc("action.global_timings", "Global Timings Defaults"));
+        ImGuiMCP::SliderFloat(GetLoc("action.global_tap", "Global Tap Window"), &globalTapWindow, 0.01f, 1.0f, "%.2f s");
+        ImGuiMCP::SliderFloat(GetLoc("action.global_hold", "Global Hold Duration"), &globalHoldDuration, 0.01f, 2.0f, "%.2f s");
         ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
 
         std::string errorMsg;
         bool hasConflict = HasConflicts(errorMsg);
 
         if (hasConflict) {
-            ImGuiMCP::TextColored({ 1.0f, 0.2f, 0.2f, 1.0f }, "[CONFIGURATION ERROR]");
+            ImGuiMCP::TextColored({ 1.0f, 0.2f, 0.2f, 1.0f }, "%s", GetLoc("error.conflict_title", "[CONFIGURATION ERROR]"));
             ImGuiMCP::TextColored({ 1.0f, 0.8f, 0.2f, 1.0f }, "%s", errorMsg.c_str());
-            ImGuiMCP::TextColored({ 0.7f, 0.7f, 0.7f, 1.0f }, "Resolve the duplicate by changing the key or State.");
+            ImGuiMCP::TextColored({ 0.7f, 0.7f, 0.7f, 1.0f }, "%s", GetLoc("error.resolve_action", "Resolve the duplicate by changing the key or State."));
             ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
         }
 
@@ -1932,7 +1802,7 @@ namespace ActionMenuUI {
         ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_ButtonHovered, { 0.2f, 0.6f, 0.2f, 1.0f });
         ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_ButtonActive, { 0.1f, 0.4f, 0.1f, 1.0f });
 
-        if (ImGuiMCP::Button("Save and Apply Changes")) {
+        if (ImGuiMCP::Button(GetLoc("action.save_btn", "Save and Apply Changes"))) {
             SaveSettingsToJson();
             SaveActionsToJson();
         }
@@ -1940,41 +1810,31 @@ namespace ActionMenuUI {
         ImGuiMCP::EndDisabled();
 
         ImGuiMCP::SameLine();
-        if (ImGuiMCP::Button("Add New Action")) {
+        if (ImGuiMCP::Button(GetLoc("action.add_btn", "Add New Input"))) {
             ActionEntry newAction;
-            std::string baseName = "New Action";
+            std::string baseName = GetLoc("action.default_name", "New Input");
             std::string finalName = baseName;
             int counter = 1;
-
-            // Loop to ensure a unique name
             bool exists = true;
             while (exists) {
                 exists = false;
                 for (const auto& a : actionList) {
-                    if (std::string(a.name) == finalName) {
-                        exists = true;
-                        break;
-                    }
+                    if (std::string(a.name) == finalName) { exists = true; break; }
                 }
                 if (exists) {
                     finalName = baseName + " " + std::to_string(counter);
                     counter++;
                 }
             }
-
             strncpy_s(newAction.name, finalName.c_str(), sizeof(newAction.name) - 1);
             actionList.push_back(newAction);
         }
-        ImGuiMCP::Spacing();
-        ImGuiMCP::Separator();
-        ImGuiMCP::Spacing();
+        ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
 
         auto listeners = PluginLogic::KeyManager::GetSingleton()->GetListeners();
         std::vector<std::string> uniqueMods;
         for (const auto& l : listeners) {
-            if (std::find(uniqueMods.begin(), uniqueMods.end(), l.modName) == uniqueMods.end()) {
-                uniqueMods.push_back(l.modName);
-            }
+            if (std::find(uniqueMods.begin(), uniqueMods.end(), l.modName) == uniqueMods.end()) uniqueMods.push_back(l.modName);
         }
 
         static char filterName[128] = "";
@@ -1983,158 +1843,143 @@ namespace ActionMenuUI {
         static std::string selectedModFilter = "";
         static char modSearchBuf[128] = "";
 
-        if (!selectedModFilter.empty() && std::find(uniqueMods.begin(), uniqueMods.end(), selectedModFilter) == uniqueMods.end()) {
-            selectedModFilter = "";
-        }
-
-        ImGuiMCP::TextColored({ 0.5f, 0.8f, 1.0f, 1.0f }, "Search Filters:");
-
+        ImGuiMCP::TextColored({ 0.5f, 0.8f, 1.0f, 1.0f }, "%s", GetLoc("common.filters", "Search Filters:"));
         ImGuiMCP::PushItemWidth(180.0f);
-
-        ImGuiMCP::InputText("Name", filterName, sizeof(filterName));
+        ImGuiMCP::InputText(GetLoc("common.name", "Name"), filterName, sizeof(filterName));
         ImGuiMCP::SameLine();
 
-        if (ImGuiMCP::BeginCombo("Key", selectedKeyFilter.empty() ? "All Keys" : selectedKeyFilter.c_str())) {
+        if (ImGuiMCP::BeginCombo(GetLoc("common.key", "Key"), selectedKeyFilter.empty() ? GetLoc("dash.all_keys", "All Keys") : selectedKeyFilter.c_str())) {
             ImGuiMCP::InputText("Search##keySearch", keySearchBuf, sizeof(keySearchBuf));
             std::string searchLower = ToLower(keySearchBuf);
             ImGuiMCP::Separator();
 
-            if (ImGuiMCP::Selectable("All Keys", selectedKeyFilter.empty())) {
-                selectedKeyFilter = "";
-            }
-
+            if (ImGuiMCP::Selectable(GetLoc("dash.all_keys", "All Keys"), selectedKeyFilter.empty())) selectedKeyFilter = "";
             for (size_t k = 1; k < std::size(pcKeyNames); ++k) {
-                std::string kName = pcKeyNames[k];
-                if (searchLower.empty() || ToLower(kName).find(searchLower) != std::string::npos) {
-                    if (ImGuiMCP::Selectable((kName + " (PC)").c_str(), selectedKeyFilter == kName)) {
-                        selectedKeyFilter = kName;
-                    }
+                if (searchLower.empty() || ToLower(pcKeyNames[k]).find(searchLower) != std::string::npos) {
+                    if (ImGuiMCP::Selectable(pcKeyNames[k], selectedKeyFilter == pcKeyNames[k])) selectedKeyFilter = pcKeyNames[k];
                 }
             }
             for (size_t k = 1; k < std::size(gamepadKeyNames); ++k) {
-                std::string kName = gamepadKeyNames[k];
-                if (searchLower.empty() || ToLower(kName).find(searchLower) != std::string::npos) {
-                    if (ImGuiMCP::Selectable((kName + " (PAD)").c_str(), selectedKeyFilter == kName)) {
-                        selectedKeyFilter = kName;
-                    }
+                if (searchLower.empty() || ToLower(gamepadKeyNames[k]).find(searchLower) != std::string::npos) {
+                    if (ImGuiMCP::Selectable(gamepadKeyNames[k], selectedKeyFilter == gamepadKeyNames[k])) selectedKeyFilter = gamepadKeyNames[k];
                 }
             }
             ImGuiMCP::EndCombo();
         }
         ImGuiMCP::SameLine();
 
-        if (ImGuiMCP::BeginCombo("Mod", selectedModFilter.empty() ? "All Mods" : selectedModFilter.c_str())) {
+        if (ImGuiMCP::BeginCombo(GetLoc("common.mod", "Mod"), selectedModFilter.empty() ? GetLoc("dash.all_mods", "All Mods") : selectedModFilter.c_str())) {
             ImGuiMCP::InputText("Search##modSearch", modSearchBuf, sizeof(modSearchBuf));
             std::string modSearchLower = ToLower(modSearchBuf);
             ImGuiMCP::Separator();
 
-            if (ImGuiMCP::Selectable("All Mods", selectedModFilter.empty())) {
-                selectedModFilter = "";
-            }
-            if (uniqueMods.empty()) {
-                ImGuiMCP::TextDisabled("No mods connected at the moment");
-            }
-            else {
-                for (const auto& modName : uniqueMods) {
-                    if (modSearchLower.empty() || ToLower(modName).find(modSearchLower) != std::string::npos) {
-                        if (ImGuiMCP::Selectable(modName.c_str(), selectedModFilter == modName)) {
-                            selectedModFilter = modName;
-                        }
-                    }
+            if (ImGuiMCP::Selectable(GetLoc("dash.all_mods", "All Mods"), selectedModFilter.empty())) selectedModFilter = "";
+            for (const auto& modName : uniqueMods) {
+                if (modSearchLower.empty() || ToLower(modName).find(modSearchLower) != std::string::npos) {
+                    if (ImGuiMCP::Selectable(modName.c_str(), selectedModFilter == modName)) selectedModFilter = modName;
                 }
             }
             ImGuiMCP::EndCombo();
         }
         ImGuiMCP::PopItemWidth();
-
         ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
 
         std::string lowerFilterName = ToLower(filterName);
 
         for (size_t i = 0; i < actionList.size(); ++i) {
             auto& action = actionList[i];
-
-            if (!lowerFilterName.empty() && ToLower(action.name).find(lowerFilterName) == std::string::npos) {
-                continue;
-            }
-
-            if (!HasKeyConfigured(action, selectedKeyFilter)) {
-                continue;
-            }
+            if (!lowerFilterName.empty() && ToLower(action.name).find(lowerFilterName) == std::string::npos) continue;
+            if (!HasKeyConfigured(action, selectedKeyFilter)) continue;
 
             std::vector<PluginLogic::ModListener> activeListeners;
             bool modMatch = selectedModFilter.empty();
-
             for (const auto& l : listeners) {
                 if (l.actionID == static_cast<int>(i)) {
                     activeListeners.push_back(l);
-                    if (!selectedModFilter.empty() && l.modName == selectedModFilter) {
-                        modMatch = true;
-                    }
+                    if (!selectedModFilter.empty() && l.modName == selectedModFilter) modMatch = true;
                 }
             }
-            if (!selectedModFilter.empty() && !modMatch) {
-                continue;
+            if (!selectedModFilter.empty() && !modMatch) continue;
+
+            bool hasStateWarning = false;
+            for (const auto& listener : activeListeners) {
+                auto checkValidity = [&](int mAct, int modAct) {
+                    bool mOk = listener.validMainActions.empty() || std::find(listener.validMainActions.begin(), listener.validMainActions.end(), mAct) != listener.validMainActions.end();
+                    bool modOk = listener.validModActions.empty() || std::find(listener.validModActions.begin(), listener.validModActions.end(), modAct) != listener.validModActions.end();
+                    return mOk && modOk;
+                    };
+
+                bool pcOk = (action.pcMainKey == 0) || checkValidity(action.pcMainAction, action.pcModAction);
+                bool padOk = (action.gamepadMainKey == 0) || checkValidity(action.gamepadMainAction, action.gamepadModAction);
+
+                if (!pcOk || !padOk) {
+                    hasStateWarning = true;
+                    break;
+                }
             }
 
             ImGuiMCP::PushID(static_cast<int>(i));
-
             std::string actionSummary = GetActionSummary(action);
-            std::string headerLabel = "[" + std::to_string(i) + "] " + std::string(action.name) + "   -   " + actionSummary + "###actionHeader_" + std::to_string(i);
-            ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_Header, { 0.2f, 0.2f, 0.2f, 1.0f });
+            std::string headerWarning = hasStateWarning ? " [!]" : "";
+            std::string headerLabel = "[" + std::to_string(i) + "] " + std::string(action.name) + headerWarning + "   -   " + actionSummary + "###actionHeader_" + std::to_string(i);
+
+            if (hasStateWarning) {
+                ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_Header, { 0.4f, 0.1f, 0.1f, 1.0f });
+            }
+            else {
+                ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_Header, { 0.2f, 0.2f, 0.2f, 1.0f });
+            }
 
             if (ImGuiMCP::CollapsingHeader(headerLabel.c_str())) {
                 ImGuiMCP::PopStyleColor();
-                ImGuiMCP::Indent();
-                ImGuiMCP::Spacing();
+                ImGuiMCP::Indent(); ImGuiMCP::Spacing();
 
-                ImGuiMCP::InputText("Action Name", action.name, sizeof(action.name));
+                if (hasStateWarning) {
+                    ImGuiMCP::TextColored({ 1.0f, 0.4f, 0.4f, 1.0f }, "%s", GetLoc("action.warning_state", "[WARNING] Selected state is NOT supported by a connected Mod!"));
+                    ImGuiMCP::Spacing();
+                }
 
+                ImGuiMCP::InputText(GetLoc("common.name", "Name"), action.name, sizeof(action.name));
                 ImGuiMCP::Spacing();
 
                 int currentId = static_cast<int>(i);
                 ImGuiMCP::PushItemWidth(200.0f);
-                if (ImGuiMCP::InputInt("Action ID", &currentId, 1, 10, ImGuiMCP::ImGuiInputTextFlags_EnterReturnsTrue)) {
-                    if (currentId >= 0 && currentId < static_cast<int>(actionList.size()) && currentId != i) {
-                        std::swap(actionList[i], actionList[currentId]);
-                    }
+                if (ImGuiMCP::InputInt(GetLoc("common.id", "ID"), &currentId, 1, 10, ImGuiMCP::ImGuiInputTextFlags_EnterReturnsTrue)) {
+                    if (currentId >= 0 && currentId < static_cast<int>(actionList.size()) && currentId != i) std::swap(actionList[i], actionList[currentId]);
                 }
                 ImGuiMCP::PopItemWidth();
-                if (ImGuiMCP::IsItemHovered()) ImGuiMCP::SetTooltip("Type the ID and press ENTER to swap actions.");
                 ImGuiMCP::SameLine();
 
                 ImGuiMCP::BeginDisabled(i == 0);
-                if (ImGuiMCP::Button("Move Up")) std::swap(actionList[i], actionList[i - 1]);
+                if (ImGuiMCP::Button(GetLoc("common.move_up", "Move Up"))) std::swap(actionList[i], actionList[i - 1]);
                 ImGuiMCP::EndDisabled();
                 ImGuiMCP::SameLine();
 
                 ImGuiMCP::BeginDisabled(i == actionList.size() - 1);
-                if (ImGuiMCP::Button("Move Down")) std::swap(actionList[i], actionList[i + 1]);
+                if (ImGuiMCP::Button(GetLoc("common.move_down", "Move Down"))) std::swap(actionList[i], actionList[i + 1]);
                 ImGuiMCP::EndDisabled();
                 ImGuiMCP::SameLine();
 
                 ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_Button, { 0.6f, 0.2f, 0.2f, 1.0f });
-                ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_ButtonHovered, { 0.8f, 0.3f, 0.3f, 1.0f });
-                if (ImGuiMCP::Button("Delete Action")) {
+                if (ImGuiMCP::Button(GetLoc("common.delete", "Delete"))) {
                     actionList.erase(actionList.begin() + i);
-                    ImGuiMCP::PopStyleColor(2);
-                    ImGuiMCP::Unindent();
-                    ImGuiMCP::PopID();
+                    ImGuiMCP::PopStyleColor();
+                    ImGuiMCP::Unindent(); ImGuiMCP::PopID();
                     break;
                 }
-                ImGuiMCP::PopStyleColor(2);
+                ImGuiMCP::PopStyleColor();
                 ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
 
-                ImGuiMCP::TextColored({ 0.5f, 0.8f, 1.0f, 1.0f }, "Keyboard and Mouse");
+                // PC Block
+                ImGuiMCP::TextColored({ 0.5f, 0.8f, 1.0f, 1.0f }, "%s", GetLoc("action.pc_header", "Keyboard and Mouse"));
                 bool canGesturePC = (action.pcMainAction == 2 || action.pcMainAction == 4);
                 if (!canGesturePC && action.pcModAction == 3) action.pcModAction = 0;
 
                 if (ImGuiMCP::BeginTable("PCTable", 2, ImGuiMCP::ImGuiTableFlags_BordersInnerH)) {
-                    ImGuiMCP::TableSetupColumn("Key / Trigger", ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, 200.0f);
-                    ImGuiMCP::TableSetupColumn("State", ImGuiMCP::ImGuiTableColumnFlags_WidthStretch);
+                    ImGuiMCP::TableSetupColumn(GetLoc("action.col_key", "Key / Trigger"), ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, 200.0f);
+                    ImGuiMCP::TableSetupColumn(GetLoc("action.col_state", "State"), ImGuiMCP::ImGuiTableColumnFlags_WidthStretch);
 
-                    ImGuiMCP::TableNextRow();
-                    ImGuiMCP::TableSetColumnIndex(0);
+                    ImGuiMCP::TableNextRow(); ImGuiMCP::TableSetColumnIndex(0);
                     int pcMainIdx = GetIndexFromID(action.pcMainKey, pcKeyIDs, std::size(pcKeyIDs));
                     ImGuiMCP::SetNextItemWidth(180.0f);
                     if (SearchableCombo("##pcMKey", &pcMainIdx, pcKeyNames, std::size(pcKeyNames))) {
@@ -2143,34 +1988,33 @@ namespace ActionMenuUI {
                         action.pcMainKey = selectedKey;
                     }
 
-                    ImGuiMCP::TableSetColumnIndex(1);
-                    ImGuiMCP::SetNextItemWidth(150.0f);
+                    ImGuiMCP::TableSetColumnIndex(1); ImGuiMCP::SetNextItemWidth(150.0f);
                     if (action.pcMainKey == 0) action.pcMainAction = 0;
                     ImGuiMCP::BeginDisabled(action.pcMainKey == 0);
-                    if (ImGuiMCP::Combo("##pcMAct", &action.pcMainAction, actionStateNames, 5)) {
-                        if (action.pcMainAction == 3) action.pcMainAction = 0; 
+                    if (ImGuiMCP::BeginCombo("##pcMAct", GetStateName(action.pcMainAction))) {
+                        for (int s = 0; s < 5; ++s) {
+                            if (s == 3) continue; // Pula o gesto no Main
+                            if (ImGuiMCP::Selectable(GetStateName(s), action.pcMainAction == s)) action.pcMainAction = s;
+                        }
+                        ImGuiMCP::EndCombo();
                     }
                     if (action.pcMainAction == 1) {
-                        ImGuiMCP::SameLine();
-                        ImGuiMCP::SetNextItemWidth(140.0f);
-                        ImGuiMCP::InputInt("Taps##pcMainTap", &action.pcMainTapCount);
+                        ImGuiMCP::SameLine(); ImGuiMCP::SetNextItemWidth(140.0f);
+                        ImGuiMCP::InputInt(GetLoc("action.taps", "Taps##pcMainTap"), &action.pcMainTapCount);
                         if (action.pcMainTapCount < 1) action.pcMainTapCount = 1;
                     }
                     ImGuiMCP::EndDisabled();
 
-                    ImGuiMCP::TableNextRow();
-                    ImGuiMCP::TableSetColumnIndex(0); ImGuiMCP::TextDisabled("   + Modifier (Optional)");
+                    ImGuiMCP::TableNextRow(); ImGuiMCP::TableSetColumnIndex(0);
+                    ImGuiMCP::TextDisabled("%s", GetLoc("action.mod_optional", "   + Modifier (Optional)"));
 
                     if (action.pcModAction == 3) {
                         std::string gesturePreview = (action.gestureIndex >= 0 && action.gestureIndex < movementList.size())
-                            ? std::string(movementList[action.gestureIndex].name) : "[ No Gesture ]";
-
+                            ? std::string(movementList[action.gestureIndex].name) : GetLoc("input.no_gesture", "[ No Gesture ]");
                         ImGuiMCP::SetNextItemWidth(180.0f);
                         if (ImGuiMCP::BeginCombo("##pcModKey", gesturePreview.c_str())) {
                             for (size_t gIdx = 0; gIdx < movementList.size(); ++gIdx) {
-                                if (ImGuiMCP::Selectable(movementList[gIdx].name, action.gestureIndex == (int)gIdx)) {
-                                    action.gestureIndex = (int)gIdx;
-                                }
+                                if (ImGuiMCP::Selectable(movementList[gIdx].name, action.gestureIndex == (int)gIdx)) action.gestureIndex = (int)gIdx;
                             }
                             ImGuiMCP::EndCombo();
                         }
@@ -2182,64 +2026,48 @@ namespace ActionMenuUI {
                             int selectedKey = pcKeyIDs[pcModIdx];
                             if (selectedKey != 0 && selectedKey == action.pcMainKey) action.pcMainKey = 0;
                             action.pcModifierKey = selectedKey;
-
-                            if (action.pcModifierKey == 0) {
-                                action.pcModAction = 0;
-                            }
+                            if (action.pcModifierKey == 0) action.pcModAction = 0;
                         }
                     }
 
-                        ImGuiMCP::TableSetColumnIndex(1);
-                        ImGuiMCP::SetNextItemWidth(150.0f);
-
-                        if (ImGuiMCP::Combo("##pcModAct", &action.pcModAction, actionStateNames, 5)) {
-                            if (!canGesturePC && action.pcModAction == 3) action.pcModAction = 0;
-                            if (action.pcModAction == 0) {
-                                // Regra 1: Ação é Ignore -> Tecla DEVE ser None
-                                action.pcModifierKey = 0;
-                            }
-                            else if (action.pcModAction == 3) {
-                                // Regra 2 (Gestos): Ação não é Ignore. Se não houver gesto selecionado, pega o primeiro.
-                                if (action.gestureIndex < 0 && !movementList.empty()) {
-                                    action.gestureIndex = 0;
-                                }
-                            }
-                            else {
-                                // Regra 2 (Tap/Hold): Ação não é Ignore. Se a tecla for None, pega a primeira válida.
-                                if (action.pcModifierKey == 0) {
+                    ImGuiMCP::TableSetColumnIndex(1); ImGuiMCP::SetNextItemWidth(150.0f);
+                    if (ImGuiMCP::BeginCombo("##pcModAct", GetStateName(action.pcModAction))) {
+                        for (int s = 0; s < 5; ++s) {
+                            if (!canGesturePC && s == 3) continue;
+                            if (ImGuiMCP::Selectable(GetStateName(s), action.pcModAction == s)) {
+                                action.pcModAction = s;
+                                if (s == 0) action.pcModifierKey = 0;
+                                else if (s == 3 && action.gestureIndex < 0 && !movementList.empty()) action.gestureIndex = 0;
+                                else if (action.pcModifierKey == 0) {
                                     for (size_t k = 1; k < std::size(pcKeyIDs); ++k) {
-                                        if (pcKeyIDs[k] != action.pcMainKey) {
-                                            action.pcModifierKey = pcKeyIDs[k];
-                                            break;
-                                        }
+                                        if (pcKeyIDs[k] != action.pcMainKey) { action.pcModifierKey = pcKeyIDs[k]; break; }
                                     }
                                 }
                             }
                         }
-                        if (action.pcModAction == 1) { 
-                            ImGuiMCP::SameLine();
-                            ImGuiMCP::SetNextItemWidth(140.0f);
-                            ImGuiMCP::InputInt("Taps##pcModTap", &action.pcModTapCount);
-                            if (action.pcModTapCount < 1) action.pcModTapCount = 1;
-                        }
-                    
+                        ImGuiMCP::EndCombo();
+                    }
+                    if (action.pcModAction == 1) {
+                        ImGuiMCP::SameLine(); ImGuiMCP::SetNextItemWidth(140.0f);
+                        ImGuiMCP::InputInt(GetLoc("action.taps", "Taps##pcModTap"), &action.pcModTapCount);
+                        if (action.pcModTapCount < 1) action.pcModTapCount = 1;
+                    }
                     ImGuiMCP::EndTable();
                 }
-                ImGuiMCP::Checkbox("Delay##pcDelay", &action.pcDelayTap);
+                ImGuiMCP::Checkbox(GetLoc("action.delay", "Delay##pcDelay"), &action.pcDelayTap);
                 ShowDelayTooltip();
-
                 ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
 
-                ImGuiMCP::TextColored({ 0.5f, 1.0f, 0.5f, 1.0f }, "Gamepad");
+                // Pad Block
+                ImGuiMCP::TextColored({ 0.5f, 1.0f, 0.5f, 1.0f }, "%s", GetLoc("action.pad_header", "Gamepad"));
                 bool canGesturePad = (action.gamepadMainAction == 2 || action.gamepadMainAction == 4);
                 if (!canGesturePad && action.gamepadModAction == 3) action.gamepadModAction = 0;
 
                 if (ImGuiMCP::BeginTable("PadTable", 2, ImGuiMCP::ImGuiTableFlags_BordersInnerH)) {
-                    ImGuiMCP::TableSetupColumn("Key / Trigger", ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, 200.0f);
-                    ImGuiMCP::TableSetupColumn("State", ImGuiMCP::ImGuiTableColumnFlags_WidthStretch);
+                    ImGuiMCP::TableSetupColumn(GetLoc("action.col_key", "Key / Trigger"), ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, 200.0f);
+                    ImGuiMCP::TableSetupColumn(GetLoc("action.col_state", "State"), ImGuiMCP::ImGuiTableColumnFlags_WidthStretch);
 
-                    ImGuiMCP::TableNextRow();
-                    ImGuiMCP::TableSetColumnIndex(0);
+                    ImGuiMCP::TableNextRow(); ImGuiMCP::TableSetColumnIndex(0);
                     int padMainIdx = GetIndexFromID(action.gamepadMainKey, gamepadKeyIDs, std::size(gamepadKeyIDs));
                     ImGuiMCP::SetNextItemWidth(180.0f);
                     if (SearchableCombo("##padMKey", &padMainIdx, gamepadKeyNames, std::size(gamepadKeyNames))) {
@@ -2248,34 +2076,33 @@ namespace ActionMenuUI {
                         action.gamepadMainKey = selectedKey;
                     }
 
-                    ImGuiMCP::TableSetColumnIndex(1);
-                    ImGuiMCP::SetNextItemWidth(150.0f);
+                    ImGuiMCP::TableSetColumnIndex(1); ImGuiMCP::SetNextItemWidth(150.0f);
                     if (action.gamepadMainKey == 0) action.gamepadMainAction = 0;
                     ImGuiMCP::BeginDisabled(action.gamepadMainKey == 0);
-                    if (ImGuiMCP::Combo("##padMAct", &action.gamepadMainAction, actionStateNames, 5)) {
-                        if (action.gamepadMainAction == 3) action.gamepadMainAction = 0;
+                    if (ImGuiMCP::BeginCombo("##padMAct", GetStateName(action.gamepadMainAction))) {
+                        for (int s = 0; s < 5; ++s) {
+                            if (s == 3) continue; 
+                            if (ImGuiMCP::Selectable(GetStateName(s), action.gamepadMainAction == s)) action.gamepadMainAction = s;
+                        }
+                        ImGuiMCP::EndCombo();
                     }
                     if (action.gamepadMainAction == 1) {
-                        ImGuiMCP::SameLine();
-                        ImGuiMCP::SetNextItemWidth(140.0f);
-                        ImGuiMCP::InputInt("Taps##padMainTap", &action.gamepadMainTapCount);
+                        ImGuiMCP::SameLine(); ImGuiMCP::SetNextItemWidth(140.0f);
+                        ImGuiMCP::InputInt(GetLoc("action.taps", "Taps##padMainTap"), &action.gamepadMainTapCount);
                         if (action.gamepadMainTapCount < 1) action.gamepadMainTapCount = 1;
                     }
                     ImGuiMCP::EndDisabled();
 
-                    ImGuiMCP::TableNextRow();
-                    ImGuiMCP::TableSetColumnIndex(0); ImGuiMCP::TextDisabled("   + Modifier (Optional)");
+                    ImGuiMCP::TableNextRow(); ImGuiMCP::TableSetColumnIndex(0);
+                    ImGuiMCP::TextDisabled("%s", GetLoc("action.mod_optional", "   + Modifier (Optional)"));
 
                     if (action.gamepadModAction == 3) {
                         std::string gesturePreview = (action.gestureIndex >= 0 && action.gestureIndex < movementList.size())
-                            ? std::string(movementList[action.gestureIndex].name) : "[ No Gesture ]";
-
+                            ? std::string(movementList[action.gestureIndex].name) : GetLoc("input.no_gesture", "[ No Gesture ]");
                         ImGuiMCP::SetNextItemWidth(180.0f);
                         if (ImGuiMCP::BeginCombo("##padModKey", gesturePreview.c_str())) {
                             for (size_t gIdx = 0; gIdx < movementList.size(); ++gIdx) {
-                                if (ImGuiMCP::Selectable(movementList[gIdx].name, action.gestureIndex == (int)gIdx)) {
-                                    action.gestureIndex = (int)gIdx;
-                                }
+                                if (ImGuiMCP::Selectable(movementList[gIdx].name, action.gestureIndex == (int)gIdx)) action.gestureIndex = (int)gIdx;
                             }
                             ImGuiMCP::EndCombo();
                         }
@@ -2287,115 +2114,108 @@ namespace ActionMenuUI {
                             int selectedKey = gamepadKeyIDs[padModIdx];
                             if (selectedKey != 0 && selectedKey == action.gamepadMainKey) action.gamepadMainKey = 0;
                             action.gamepadModifierKey = selectedKey;
-                            if (action.gamepadModifierKey == 0) {
-                                action.gamepadModAction = 0;
-                            }
+                            if (action.gamepadModifierKey == 0) action.gamepadModAction = 0;
                         }
                     }
 
-                    ImGuiMCP::TableSetColumnIndex(1);
-                    ImGuiMCP::SetNextItemWidth(150.0f);
-
-
-                    if (ImGuiMCP::Combo("##padModAct", &action.gamepadModAction, actionStateNames, 5)) {
-                        if (!canGesturePad && action.gamepadModAction == 3) action.gamepadModAction = 0;
-
-                        if (action.gamepadModAction == 0) {
-                            // Regra 1: Ação é Ignore -> Tecla DEVE ser None
-                            action.gamepadModifierKey = 0;
-                        }
-                        else if (action.gamepadModAction == 3) {
-                            // Regra 2 (Gestos): Ação não é Ignore. Se não houver gesto selecionado, pega o primeiro.
-                            if (action.gestureIndex < 0 && !movementList.empty()) {
-                                action.gestureIndex = 0;
-                            }
-                        }
-                        else {
-                            // Regra 2 (Tap/Hold): Ação não é Ignore. Se o botão for None, pega o primeiro válido.
-                            if (action.gamepadModifierKey == 0) {
-                                for (size_t k = 1; k < std::size(gamepadKeyIDs); ++k) {
-                                    if (gamepadKeyIDs[k] != action.gamepadMainKey) {
-                                        action.gamepadModifierKey = gamepadKeyIDs[k];
-                                        break;
+                    ImGuiMCP::TableSetColumnIndex(1); ImGuiMCP::SetNextItemWidth(150.0f);
+                    if (ImGuiMCP::BeginCombo("##padModAct", GetStateName(action.gamepadModAction))) {
+                        for (int s = 0; s < 5; ++s) {
+                            if (!canGesturePad && s == 3) continue;
+                            if (ImGuiMCP::Selectable(GetStateName(s), action.gamepadModAction == s)) {
+                                action.gamepadModAction = s;
+                                if (s == 0) action.gamepadModifierKey = 0;
+                                else if (s == 3 && action.gestureIndex < 0 && !movementList.empty()) action.gestureIndex = 0;
+                                else if (action.gamepadModifierKey == 0) {
+                                    for (size_t k = 1; k < std::size(gamepadKeyIDs); ++k) {
+                                        if (gamepadKeyIDs[k] != action.gamepadMainKey) { action.gamepadModifierKey = gamepadKeyIDs[k]; break; }
                                     }
                                 }
                             }
                         }
+                        ImGuiMCP::EndCombo();
                     }
-                    if (action.gamepadModAction == 1) { 
-                        ImGuiMCP::SameLine();
-                        ImGuiMCP::SetNextItemWidth(140.0f);
-                        ImGuiMCP::InputInt("Taps##padModTap", &action.gamepadModTapCount);
+                    if (action.gamepadModAction == 1) {
+                        ImGuiMCP::SameLine(); ImGuiMCP::SetNextItemWidth(140.0f);
+                        ImGuiMCP::InputInt(GetLoc("action.taps", "Taps##padModTap"), &action.gamepadModTapCount);
                         if (action.gamepadModTapCount < 1) action.gamepadModTapCount = 1;
                     }
                     if (action.gamepadModAction == 3) {
-                        ImGuiMCP::TableNextRow();
-                        ImGuiMCP::TableSetColumnIndex(0);
-                        ImGuiMCP::TextColored({ 0.8f, 0.8f, 0.4f, 1.0f }, "   Thumbstick for Gesture:");
+                        ImGuiMCP::TableNextRow(); ImGuiMCP::TableSetColumnIndex(0);
+                        ImGuiMCP::TextColored({ 0.8f, 0.8f, 0.4f, 1.0f }, "%s", GetLoc("action.thumbstick", "   Thumbstick for Gesture:"));
                         ImGuiMCP::TableSetColumnIndex(1);
-                        ImGuiMCP::RadioButton("Left##padStick", &action.gamepadGestureStick, 0);
+                        ImGuiMCP::RadioButton(GetLoc("action.left", "Left##padStick"), &action.gamepadGestureStick, 0);
                         ImGuiMCP::SameLine();
-                        ImGuiMCP::RadioButton("Right##padStick", &action.gamepadGestureStick, 1);
+                        ImGuiMCP::RadioButton(GetLoc("action.right", "Right##padStick"), &action.gamepadGestureStick, 1);
                     }
-
                     ImGuiMCP::EndTable();
                 }
-                ImGuiMCP::Checkbox("Delay##padDelay", &action.gamepadDelayTap);
+                ImGuiMCP::Checkbox(GetLoc("action.delay", "Delay##padDelay"), &action.gamepadDelayTap);
                 ShowDelayTooltip();
-
                 ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
 
-                ImGuiMCP::TextColored({ 0.8f, 0.8f, 0.5f, 1.0f }, "Response Timings");
-                ImGuiMCP::Checkbox("Use Custom Timings for this Action", &action.useCustomTimings);
+                ImGuiMCP::TextColored({ 0.8f, 0.8f, 0.5f, 1.0f }, "%s", GetLoc("action.response_timings", "Response Timings"));
+                ImGuiMCP::Checkbox(GetLoc("action.use_custom", "Use Custom Timings for this Action"), &action.useCustomTimings);
 
                 float tempHold = action.useCustomTimings ? action.holdDuration : globalHoldDuration;
                 float tempTap = action.useCustomTimings ? action.tapWindow : globalTapWindow;
 
                 ImGuiMCP::BeginDisabled(!action.useCustomTimings);
-
                 ImGuiMCP::PushItemWidth(150.0f);
-                ImGuiMCP::SliderFloat("Tap Window##act", &tempTap, 0.01f, 1.0f, "%.2f");
-                ImGuiMCP::PopItemWidth();
-
-                ImGuiMCP::SameLine();
-
+                ImGuiMCP::SliderFloat(GetLoc("action.tap_window", "Tap Window##act"), &tempTap, 0.01f, 1.0f, "%.2f");
+                ImGuiMCP::PopItemWidth(); ImGuiMCP::SameLine();
                 ImGuiMCP::PushItemWidth(300.0f);
                 ImGuiMCP::InputFloat("##TapInput", &tempTap, 0.01f, 0.0f, "%.2f");
                 ImGuiMCP::PopItemWidth();
 
                 ImGuiMCP::PushItemWidth(150.0f);
-                ImGuiMCP::SliderFloat("Hold Time##act", &tempHold, 0.01f, 2.0f, "%.2f");
-                ImGuiMCP::PopItemWidth();
-
-                ImGuiMCP::SameLine();
-
+                ImGuiMCP::SliderFloat(GetLoc("action.hold_time", "Hold Time##act"), &tempHold, 0.01f, 2.0f, "%.2f");
+                ImGuiMCP::PopItemWidth(); ImGuiMCP::SameLine();
                 ImGuiMCP::PushItemWidth(300.0f);
                 ImGuiMCP::InputFloat("##HoldInput", &tempHold, 0.01f, 0.0f, "%.2f");
                 ImGuiMCP::PopItemWidth();
-
                 ImGuiMCP::EndDisabled();
 
-                if (action.useCustomTimings) {
-                    action.holdDuration = tempHold;
-                    action.tapWindow = tempTap;
-                }
-
+                if (action.useCustomTimings) { action.holdDuration = tempHold; action.tapWindow = tempTap; }
                 ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
 
                 if (!activeListeners.empty()) {
-                    ImGuiMCP::TextColored({ 0.9f, 0.6f, 1.0f, 1.0f }, "Mods Connected to this Action:");
+                    ImGuiMCP::TextColored({ 0.9f, 0.6f, 1.0f, 1.0f }, "%s", GetLoc("common.connected_mods", "Mods Connected to this Action:"));
                     for (const auto& listener : activeListeners) {
-                        ImGuiMCP::BulletText("Mod: '%s'  |  Purpose: '%s'", listener.modName.c_str(), listener.purpose.c_str());
+
+                        std::string modLabel = GetLoc("common.mod", "Mod");
+                        std::string purposeLabel = GetLoc("common.purpose", "Purpose");
+                        std::string actionLabel = GetLoc("common.action", "Action");
+                        std::string modActionLabel = GetLoc("common.mod_action", "Mod Action");
+                        std::string anyLabel = GetLoc("common.any", "Any");
+
+                        std::string line = modLabel + ": '" + listener.modName + "'  |  " + purposeLabel + ": '" + listener.purpose + "'";
+
+                        auto formatExpected = [&](const std::vector<int>& validList) {
+                            if (validList.empty()) return anyLabel;
+                            std::string res = "";
+                            for (size_t k = 0; k < validList.size(); ++k) {
+                                if (validList[k] >= 0 && validList[k] <= 4) {
+                                    res += GetStateName(validList[k]); 
+                                    if (k < validList.size() - 1) res += ", ";
+                                }
+                            }
+                            return res;
+                            };
+
+                        if (!listener.validMainActions.empty() || !listener.validModActions.empty()) {
+                            line += "  |  " + actionLabel + ": " + formatExpected(listener.validMainActions) +
+                                "  |  " + modActionLabel + ": " + formatExpected(listener.validModActions);
+                        }
+
+                        ImGuiMCP::BulletText("%s", line.c_str());
                     }
                     ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
                 }
 
-                ImGuiMCP::Unindent();
-                ImGuiMCP::Spacing();
+                ImGuiMCP::Unindent(); ImGuiMCP::Spacing();
             }
-            else {
-                ImGuiMCP::PopStyleColor();
-            }
+            else ImGuiMCP::PopStyleColor();
             ImGuiMCP::PopID();
         }
     }
@@ -2428,18 +2248,19 @@ namespace ActionMenuUI {
     }
 
     inline void RenderDebugMenu() {
-        ImGuiMCP::Text("Input Manager - Debug");
+        ImGuiMCP::Text("%s", GetLoc("debug.title", "Input Manager - Debug"));
         ImGuiMCP::Separator(); ImGuiMCP::Spacing();
 
-        if (ImGuiMCP::Checkbox("Show Log in Hud and on log", &showDebugLogs)) {
+        if (ImGuiMCP::Checkbox(GetLoc("debug.show_log", "Show Log in Hud and on log"), &showDebugLogs)) {
             SaveSettingsToJson();
         }
         ImGuiMCP::Spacing();
-        ImGuiMCP::TextDisabled("If enabled, triggered actions and motions will be displayed on the HUD and printed to the SKSE log.");
+        ImGuiMCP::TextDisabled("%s", GetLoc("debug.desc", "If enabled, triggered actions and motions will be displayed on the HUD and printed to the SKSE log."));
     }
 
     inline void Register() {
         if (!SKSEMenuFramework::IsInstalled()) return;
+        LoadLanguage();
         LoadCacheFromJson();
         LoadSettingsFromJson();
         LoadActionsFromJson();
@@ -2447,10 +2268,10 @@ namespace ActionMenuUI {
         LoadMotionsFromJson();
         GenerateDefaultActions();
         SKSEMenuFramework::SetSection("Input Manager");
-        SKSEMenuFramework::AddSectionItem("Inputs", RenderMenu);
-        SKSEMenuFramework::AddSectionItem("Motion Inputs", RenderMotionMenu);
-        SKSEMenuFramework::AddSectionItem("Gestures", RenderGesturesMenu);
-        SKSEMenuFramework::AddSectionItem("Inputs in use", RenderDashboardMenu);
-        SKSEMenuFramework::AddSectionItem("Debug", RenderDebugMenu);
+        SKSEMenuFramework::AddSectionItem(GetLoc("menu.tab_inputs", "Inputs"), RenderMenu);
+        SKSEMenuFramework::AddSectionItem(GetLoc("menu.tab_motions", "Motion Inputs"), RenderMotionMenu);
+        SKSEMenuFramework::AddSectionItem(GetLoc("menu.tab_gestures", "Gestures"), RenderGesturesMenu);
+        SKSEMenuFramework::AddSectionItem(GetLoc("menu.tab_dashboard", "Inputs in use"), RenderDashboardMenu);
+        SKSEMenuFramework::AddSectionItem(GetLoc("menu.tab_debug", "Debug"), RenderDebugMenu);
     }
 }

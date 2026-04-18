@@ -13,7 +13,7 @@ namespace InputManagerAPI {
         const char* GetInputName(int inputType, int inputID) override;
         int CreateInput(int inputType, const char* inputName) override;
         bool DeleteInput(int inputType, int inputID) override;
-        void UpdateListener(int inputType, int inputID, const char* modName, const char* purpose, bool isRegistering) override;
+        void UpdateListener(int inputType, int inputID, const char* modName, const char* purpose, bool isRegistering, const int* validMainActions = nullptr, int mainCount = 0, const int* validModActions = nullptr, int modCount = 0) override;
         size_t GetListenerCount(int inputType, int inputID) override;
         const char* GetListenerModName(int inputType, int inputID, size_t index) override;
 

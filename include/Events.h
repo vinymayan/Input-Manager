@@ -58,6 +58,8 @@ namespace PluginLogic {
         int actionID;
         std::string modName;
         std::string purpose;
+        std::vector<int> validMainActions; 
+        std::vector<int> validModActions; 
     };
 
     struct InputHistoryRecord {
@@ -77,7 +79,7 @@ namespace PluginLogic {
         void ClearStates();
         void ClearBindings();
         void SortBindings();
-        void UpdateModListener(int actionID, const std::string& modName, const std::string& purpose, bool isRegistering);
+        void UpdateModListener(int actionID, const std::string& modName, const std::string& purpose, bool isRegistering, const std::vector<int>& validMain = {}, const std::vector<int>& validMod = {});
         const std::vector<ModListener>& GetListeners() const { return _listeners; }
         bool IsDrawingGesture() const { return _isDrawingGesture; }
         void UpdateMotionModListener(int motionID, const std::string& modName, const std::string& purpose, bool isRegistering);

@@ -97,32 +97,44 @@ namespace InputManagerAPI {
                 int normAModAct = (aModAct == 4) ? 2 : aModAct;
                 int normBModAct = (bModAct == 4) ? 2 : bModAct;
 
-                // Verifica Combinação Direta (Main == Main e Mod == Mod)
-                if (aMKey == bMKey && normAMAct == normBMAct) {
-                    bool mainTapMatch = (normAMAct == 1) ? (aMTap == bMTap) : true;
-
-                    if (mainTapMatch) {
-                        if (aModAct == 3 && bModAct == 3) {
-                            return aGest == bGest;
-                        }
-                        else if (aModAct != 3 && bModAct != 3) {
-                            bool modTapMatch = (normAModAct == 1) ? (aModTap == bModTap) : true;
-                            return aModKey == bModKey && normAModAct == normBModAct && modTapMatch;
-                        }
+                // Se houver gestos, tratamos isoladamente
+                if (aModAct == 3 || bModAct == 3) {
+                    if (aMKey == bMKey && normAMAct == normBMAct && aModAct == bModAct) {
+                        return aGest == bGest;
                     }
+                    return false;
                 }
 
-                // Verifica Combinação Reversa (Main == Mod e Mod == Main)
-                if (aModAct != 3 && bModAct != 3 && aModKey != 0 && bModKey != 0) {
-                    if (aMKey == bModKey && normAMAct == normBModAct &&
-                        aModKey == bMKey && normAModAct == normBMAct) {
+                // Verifica se usam exatamente as mesmas duas teclas (ordem direta ou invertida)
+                bool sameKeysDirect = (aMKey == bMKey && aModKey == bModKey);
+                bool sameKeysReversed = (aMKey == bModKey && aModKey == bMKey);
 
-                        bool crossTapMatch1 = (normAMAct == 1) ? (aMTap == bModTap) : true;
-                        bool crossTapMatch2 = (normAModAct == 1) ? (aModTap == bMTap) : true;
+                if (sameKeysDirect || sameKeysReversed) {
+                    int aKey1State, aKey1Tap, aKey2State, aKey2Tap;
+                    int bKey1State, bKey1Tap, bKey2State, bKey2Tap;
 
-                        if (crossTapMatch1 && crossTapMatch2) {
-                            return true;
-                        }
+                    if (sameKeysDirect) {
+                        aKey1State = normAMAct; aKey1Tap = aMTap;
+                        aKey2State = normAModAct; aKey2Tap = aModTap;
+                        bKey1State = normBMAct; bKey1Tap = bMTap;
+                        bKey2State = normBModAct; bKey2Tap = bModTap;
+                    }
+                    else {
+                        aKey1State = normAMAct; aKey1Tap = aMTap;
+                        aKey2State = normAModAct; aKey2Tap = aModTap;
+                        bKey1State = normBModAct; bKey1Tap = bModTap;
+                        bKey2State = normBMAct; bKey2Tap = bMTap;
+                    }
+
+                    // Verifica permutação exata de estados
+                    bool matchDirect = (aKey1State == bKey1State && (aKey1State != 1 || aKey1Tap == bKey1Tap)) &&
+                        (aKey2State == bKey2State && (aKey2State != 1 || aKey2Tap == bKey2Tap));
+
+                    bool matchCross = (aKey1State == bKey2State && (aKey1State != 1 || aKey1Tap == bKey2Tap)) &&
+                        (aKey2State == bKey1State && (aKey2State != 1 || aKey2Tap == bKey1Tap));
+
+                    if (matchDirect || matchCross) {
+                        return true;
                     }
                 }
                 return false;
@@ -132,20 +144,22 @@ namespace InputManagerAPI {
             if (i == actionID) continue;
             const auto& b = ActionMenuUI::actionList[i];
 
+            // Check PC configuration
             if (CheckComboConflict(
                 newMapping.pcMainKey, newMapping.pcMainAction, newMapping.pcMainTapCount,
                 newPcModKey, newMapping.pcModAction, newMapping.pcModTapCount, newPcGestIndex,
                 b.pcMainKey, b.pcMainAction, b.pcMainTapCount,
                 b.pcModifierKey, b.pcModAction, b.pcModTapCount, b.gestureIndex)) {
-                return false;
+                return false; 
             }
 
+            // Check Gamepad configuration
             if (CheckComboConflict(
                 newMapping.gamepadMainKey, newMapping.gamepadMainAction, newMapping.gamepadMainTapCount,
                 newPadModKey, newMapping.gamepadModAction, newMapping.gamepadModTapCount, newPadGestIndex,
                 b.gamepadMainKey, b.gamepadMainAction, b.gamepadMainTapCount,
                 b.gamepadModifierKey, b.gamepadModAction, b.gamepadModTapCount, b.gestureIndex)) {
-                return false;
+                return false; 
             }
         }
 
@@ -325,8 +339,24 @@ namespace InputManagerAPI {
         return false;
     }
 
-    void InputManagerAPI_Impl::UpdateListener(int inputType, int inputID, const char* modName, const char* purpose, bool isRegistering) {
-        if (inputType == 0) PluginLogic::KeyManager::GetSingleton()->UpdateModListener(inputID, modName, purpose, isRegistering);
+    void InputManagerAPI_Impl::UpdateListener(int inputType, int inputID, const char* modName, const char* purpose, bool isRegistering, const int* validMainActions, int mainCount, const int* validModActions, int modCount) {
+        auto sanitizeArray = [](const int* arr, int count, std::vector<int>& out) {
+            if (!arr || count <= 0) return;
+            int zeroCount = 0;
+            for (int i = 0; i < count; ++i) {
+                if (arr[i] == 0) zeroCount++;
+            }
+            if (zeroCount <= 1) { 
+                out.assign(arr, arr + count);
+            }
+            };
+        std::vector<int> vMain;
+        if (validMainActions && mainCount > 0) vMain.assign(validMainActions, validMainActions + mainCount);
+
+        std::vector<int> vMod;
+        if (validModActions && modCount > 0) vMod.assign(validModActions, validModActions + modCount);
+
+        if (inputType == 0) PluginLogic::KeyManager::GetSingleton()->UpdateModListener(inputID, modName, purpose, isRegistering, vMain, vMod);
         else if (inputType == 1) PluginLogic::KeyManager::GetSingleton()->UpdateMotionModListener(inputID, modName, purpose, isRegistering);
     }
 
@@ -371,8 +401,12 @@ namespace InputManagerAPI {
     bool DeleteInput_Papyrus(RE::StaticFunctionTag*, int inputType, int inputID) {
         return InputManagerAPI_Impl::GetSingleton()->DeleteInput(inputType, inputID);
     }
-    void UpdateListener_Papyrus(RE::StaticFunctionTag*, int inputType, int inputID, RE::BSFixedString modName, RE::BSFixedString purpose, bool isRegistering) {
-        InputManagerAPI_Impl::GetSingleton()->UpdateListener(inputType, inputID, modName.c_str(), purpose.c_str(), isRegistering);
+    void UpdateListener_Papyrus(RE::StaticFunctionTag*, int inputType, int inputID, RE::BSFixedString modName, RE::BSFixedString purpose, bool isRegistering, std::vector<int> validMainActions, std::vector<int> validModActions) {
+        InputManagerAPI_Impl::GetSingleton()->UpdateListener(
+            inputType, inputID, modName.c_str(), purpose.c_str(), isRegistering,
+            validMainActions.data(), static_cast<int>(validMainActions.size()),
+            validModActions.data(), static_cast<int>(validModActions.size())
+        );
     }
     std::vector<RE::BSFixedString> GetListeners_Papyrus(RE::StaticFunctionTag*, int inputType, int inputID) {
         std::vector<RE::BSFixedString> result;

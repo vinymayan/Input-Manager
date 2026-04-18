@@ -30,21 +30,21 @@ namespace PluginLogic {
         //logger::info("[KeyManager] Bindings ordenados: Combos tem prioridade sobre Teclas Isoladas.");
     }
 
-    void KeyManager::UpdateModListener(int actionID, const std::string& modName, const std::string& purpose, bool isRegistering) {
+    void KeyManager::UpdateModListener(int actionID, const std::string& modName, const std::string& purpose, bool isRegistering, const std::vector<int>& validMain, const std::vector<int>& validMod) {
         if (isRegistering) {
-            // LÓGICA DE REGISTRO / ATUALIZAÇÃO
             for (auto& listener : _listeners) {
                 if (listener.modName == modName && listener.purpose == purpose) {
                     logger::info("[Input Manager] Atualizado! Mod: '{}' | Proposito: '{}' mudou para Acao ID: {}", modName, purpose, actionID);
                     listener.actionID = actionID;
+                    listener.validMainActions = validMain; 
+                    listener.validModActions = validMod;   
                     return;
                 }
             }
             logger::info("[Input Manager] Novo Mod Registrado! ID da Acao: {} | Mod: '{}' | Utilizado para: '{}'", actionID, modName, purpose);
-            _listeners.push_back({ actionID, modName, purpose });
+            _listeners.push_back({ actionID, modName, purpose, validMain, validMod });
         }
         else {
-            // LÓGICA DE DESREGISTRO (Remoção)
             auto it = std::remove_if(_listeners.begin(), _listeners.end(), [&](const ModListener& l) {
                 return l.modName == modName && l.purpose == purpose;
                 });
@@ -216,7 +216,7 @@ namespace PluginLogic {
                                 logger::info("[SUCCESS] {}", msg);
                                 RE::SendHUDMessage::ShowHUDMessage(msg.c_str());
                             }
-
+                           
                             InputManagerAPI::SendMotionTriggeredEvent(static_cast<int>(m), motionEntry.name);
                         }
 
@@ -230,7 +230,6 @@ namespace PluginLogic {
     }
 
 
-    // ADICIONE ESTE NOVO MÉTODO
     void KeyManager::StartMotionTesting(int motionIndex) {
         _testingMotionIndex = motionIndex;
         _motionTestSuccess = false;
