@@ -41,7 +41,7 @@ namespace ActionMenuUI {
         LangMap.clear();
         std::ifstream file(LANG_PATH, std::ios::binary);
         if (!file.is_open()) {
-            logger::warn("[Input Manager] Language.json nao encontrado. Usando textos padroes.");
+            logger::warn("[Input Manager] Language.json not found. Using default texts.");
             return;
         }
 
@@ -87,12 +87,35 @@ namespace ActionMenuUI {
     inline std::map<std::string, int> gestureCache;
     inline std::map<std::string, int> motionCache;
 
+    // --- VARIÁVEIS GLOBAIS / CONFIGURAÇÕES ---
     inline bool showGestureTrail = true;
     inline float globalTapWindow = 0.35f;
     inline float globalHoldDuration = 0.30f;
     inline bool advancedMode = false;
     inline bool defaultActionsGenerated = false;
     inline bool showDebugLogs = false;
+    inline bool useHook = false;
+
+    // Movimentação PC para Motions
+    inline int motionPC_Up = 0;
+    inline int motionPC_Down = 0;
+    inline int motionPC_Left = 0;
+    inline int motionPC_Right = 0;
+
+    // Mapeamento Teclado -> Gamepad para gravação
+    inline int mappingPad_A = 0;
+    inline int mappingPad_B = 0;
+    inline int mappingPad_X = 0;
+    inline int mappingPad_Y = 0;
+    inline int mappingPad_RB = 0;
+    inline int mappingPad_RT = 0;
+    inline int mappingPad_LB = 0;
+    inline int mappingPad_LT = 0;
+    inline int mappingPad_Up = 0;
+    inline int mappingPad_Down = 0;
+    inline int mappingPad_Left = 0;
+    inline int mappingPad_Right = 0;
+
 
     inline std::string SanitizeFileName(const std::string& input) {
         std::string output = input;
@@ -101,7 +124,7 @@ namespace ActionMenuUI {
             output.erase(std::remove(output.begin(), output.end(), c), output.end());
         }
         if (output.empty() || output.find_first_not_of(' ') == std::string::npos) {
-            output = "Unnamed_File";
+            output = GetLoc("common.unnamed_file", "Unnamed_File");
         }
         return output + ".json";
     }
@@ -171,36 +194,26 @@ namespace ActionMenuUI {
     // --- KEY LISTS ---
     inline const char* pcKeyNames[] = {
         "None",
-        // Mouse
         "Mouse 1 (Left)", "Mouse 2 (Right)", "Mouse 3 (Middle)", "Mouse 4", "Mouse 5", "Mouse 6", "Mouse 7", "Mouse 8",
         "Mouse Wheel Up", "Mouse Wheel Down",
-        // Alfabeto
         "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
-        // Números
         "1", "2", "3", "4", "5", "6", "7", "8", "9", "0",
-        // Pontuação e Símbolos
         "Minus ( - )", "Equals ( = )", "Bracket Left ( [ )", "Bracket Right ( ] )", "Semicolon ( ; )", "Apostrophe ( ' )", "Tilde ( ~ )", "Backslash ( \\ )", "Comma ( , )", "Period ( . )", "Slash ( / )",
-        // F-Keys
         "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
-        // Especiais e Modificadores
         "Esc", "Tab", "Caps Lock", "Shift (Left)", "Shift (Right)", "Ctrl (Left)", "Ctrl (Right)", "Alt (Left)", "Alt (Right)",
         "Space", "Enter", "Backspace", "Print Screen", "Scroll Lock", "Pause", "Num Lock",
-        // Navegação
         "Up Arrow", "Down Arrow", "Left Arrow", "Right Arrow", "Insert", "Delete", "Home", "End", "Page Up", "Page Down",
-        // Numpad
         "Num 0", "Num 1", "Num 2", "Num 3", "Num 4", "Num 5", "Num 6", "Num 7", "Num 8", "Num 9",
         "Num +", "Num -", "Num *", "Num /", "Num Enter", "Num Dot"
     };
 
     inline const int pcKeyIDs[] = {
         0,
-        // Mouse (Base + 256)
         RE::BSWin32MouseDevice::Keys::kLeftButton + MOUSE_OFFSET, RE::BSWin32MouseDevice::Keys::kRightButton + MOUSE_OFFSET,
         RE::BSWin32MouseDevice::Keys::kMiddleButton + MOUSE_OFFSET, RE::BSWin32MouseDevice::Keys::kButton3 + MOUSE_OFFSET,
         RE::BSWin32MouseDevice::Keys::kButton4 + MOUSE_OFFSET, RE::BSWin32MouseDevice::Keys::kButton5 + MOUSE_OFFSET,
         RE::BSWin32MouseDevice::Keys::kButton6 + MOUSE_OFFSET, RE::BSWin32MouseDevice::Keys::kButton7 + MOUSE_OFFSET,
         RE::BSWin32MouseDevice::Keys::kWheelUp + MOUSE_OFFSET, RE::BSWin32MouseDevice::Keys::kWheelDown + MOUSE_OFFSET,
-        // Alfabeto
         RE::BSKeyboardDevice::Keys::kA, RE::BSKeyboardDevice::Keys::kB, RE::BSKeyboardDevice::Keys::kC, RE::BSKeyboardDevice::Keys::kD,
         RE::BSKeyboardDevice::Keys::kE, RE::BSKeyboardDevice::Keys::kF, RE::BSKeyboardDevice::Keys::kG, RE::BSKeyboardDevice::Keys::kH,
         RE::BSKeyboardDevice::Keys::kI, RE::BSKeyboardDevice::Keys::kJ, RE::BSKeyboardDevice::Keys::kK, RE::BSKeyboardDevice::Keys::kL,
@@ -208,20 +221,16 @@ namespace ActionMenuUI {
         RE::BSKeyboardDevice::Keys::kQ, RE::BSKeyboardDevice::Keys::kR, RE::BSKeyboardDevice::Keys::kS, RE::BSKeyboardDevice::Keys::kT,
         RE::BSKeyboardDevice::Keys::kU, RE::BSKeyboardDevice::Keys::kV, RE::BSKeyboardDevice::Keys::kW, RE::BSKeyboardDevice::Keys::kX,
         RE::BSKeyboardDevice::Keys::kY, RE::BSKeyboardDevice::Keys::kZ,
-        // Números
         RE::BSKeyboardDevice::Keys::kNum1, RE::BSKeyboardDevice::Keys::kNum2, RE::BSKeyboardDevice::Keys::kNum3, RE::BSKeyboardDevice::Keys::kNum4,
         RE::BSKeyboardDevice::Keys::kNum5, RE::BSKeyboardDevice::Keys::kNum6, RE::BSKeyboardDevice::Keys::kNum7, RE::BSKeyboardDevice::Keys::kNum8,
         RE::BSKeyboardDevice::Keys::kNum9, RE::BSKeyboardDevice::Keys::kNum0,
-        // Pontuação e Símbolos
         RE::BSKeyboardDevice::Keys::kMinus, RE::BSKeyboardDevice::Keys::kEquals, RE::BSKeyboardDevice::Keys::kBracketLeft,
         RE::BSKeyboardDevice::Keys::kBracketRight, RE::BSKeyboardDevice::Keys::kSemicolon, RE::BSKeyboardDevice::Keys::kApostrophe,
         RE::BSKeyboardDevice::Keys::kTilde, RE::BSKeyboardDevice::Keys::kBackslash, RE::BSKeyboardDevice::Keys::kComma,
         RE::BSKeyboardDevice::Keys::kPeriod, RE::BSKeyboardDevice::Keys::kSlash,
-        // F-Keys
         RE::BSKeyboardDevice::Keys::kF1, RE::BSKeyboardDevice::Keys::kF2, RE::BSKeyboardDevice::Keys::kF3, RE::BSKeyboardDevice::Keys::kF4,
         RE::BSKeyboardDevice::Keys::kF5, RE::BSKeyboardDevice::Keys::kF6, RE::BSKeyboardDevice::Keys::kF7, RE::BSKeyboardDevice::Keys::kF8,
         RE::BSKeyboardDevice::Keys::kF9, RE::BSKeyboardDevice::Keys::kF10, RE::BSKeyboardDevice::Keys::kF11, RE::BSKeyboardDevice::Keys::kF12,
-        // Especiais e Modificadores
         RE::BSKeyboardDevice::Keys::kEscape, RE::BSKeyboardDevice::Keys::kTab, RE::BSKeyboardDevice::Keys::kCapsLock,
         RE::BSKeyboardDevice::Keys::kLeftShift, RE::BSKeyboardDevice::Keys::kRightShift,
         RE::BSKeyboardDevice::Keys::kLeftControl, RE::BSKeyboardDevice::Keys::kRightControl,
@@ -229,11 +238,9 @@ namespace ActionMenuUI {
         RE::BSKeyboardDevice::Keys::kSpacebar, RE::BSKeyboardDevice::Keys::kEnter, RE::BSKeyboardDevice::Keys::kBackspace,
         RE::BSKeyboardDevice::Keys::kPrintScreen, RE::BSKeyboardDevice::Keys::kScrollLock, RE::BSKeyboardDevice::Keys::kPause,
         RE::BSKeyboardDevice::Keys::kNumLock,
-        // Navegação
         RE::BSKeyboardDevice::Keys::kUp, RE::BSKeyboardDevice::Keys::kDown, RE::BSKeyboardDevice::Keys::kLeft, RE::BSKeyboardDevice::Keys::kRight,
         RE::BSKeyboardDevice::Keys::kInsert, RE::BSKeyboardDevice::Keys::kDelete, RE::BSKeyboardDevice::Keys::kHome, RE::BSKeyboardDevice::Keys::kEnd,
         RE::BSKeyboardDevice::Keys::kPageUp, RE::BSKeyboardDevice::Keys::kPageDown,
-        // Numpad
         RE::BSKeyboardDevice::Keys::kKP_0, RE::BSKeyboardDevice::Keys::kKP_1, RE::BSKeyboardDevice::Keys::kKP_2, RE::BSKeyboardDevice::Keys::kKP_3,
         RE::BSKeyboardDevice::Keys::kKP_4, RE::BSKeyboardDevice::Keys::kKP_5, RE::BSKeyboardDevice::Keys::kKP_6, RE::BSKeyboardDevice::Keys::kKP_7,
         RE::BSKeyboardDevice::Keys::kKP_8, RE::BSKeyboardDevice::Keys::kKP_9,
@@ -288,7 +295,7 @@ namespace ActionMenuUI {
             auto createCallback = [](int id, const std::string& name, const std::string& source) {
                 return [id, name, source]() {
                     if (showDebugLogs) {
-                        std::string mensagemDebug = "Action triggered: " + name + " via " + source;
+                        std::string mensagemDebug = std::string(GetLoc("debug.action_triggered", "Action triggered: ")) + name + " " + GetLoc("common.via", "via") + " " + source;
                         logger::info("[SUCCESS] {}", mensagemDebug);
                         RE::SendHUDMessage::ShowHUDMessage(mensagemDebug.c_str());
                     }
@@ -299,7 +306,7 @@ namespace ActionMenuUI {
             auto createReleaseCallback = [](int id, const std::string& name, const std::string& source) {
                 return [id, name, source]() {
                     if (showDebugLogs) {
-                        std::string mensagemDebug = "Action released: " + name + " via " + source;
+                        std::string mensagemDebug = std::string(GetLoc("debug.action_released", "Action released: ")) + name + " " + GetLoc("common.via", "via") + " " + source;
                         logger::info("[SUCCESS] {}", mensagemDebug);
                         RE::SendHUDMessage::ShowHUDMessage(mensagemDebug.c_str());
                     }
@@ -372,6 +379,26 @@ namespace ActionMenuUI {
             if (doc.HasMember("advancedMode")) advancedMode = doc["advancedMode"].GetBool();
             if (doc.HasMember("defaultActionsGenerated")) defaultActionsGenerated = doc["defaultActionsGenerated"].GetBool();
             if (doc.HasMember("showDebugLogs")) showDebugLogs = doc["showDebugLogs"].GetBool();
+
+            if (doc.HasMember("useHook")) useHook = doc["useHook"].GetBool();
+
+            if (doc.HasMember("motionPC_Up")) motionPC_Up = doc["motionPC_Up"].GetInt();
+            if (doc.HasMember("motionPC_Down")) motionPC_Down = doc["motionPC_Down"].GetInt();
+            if (doc.HasMember("motionPC_Left")) motionPC_Left = doc["motionPC_Left"].GetInt();
+            if (doc.HasMember("motionPC_Right")) motionPC_Right = doc["motionPC_Right"].GetInt();
+
+            if (doc.HasMember("mappingPad_A")) mappingPad_A = doc["mappingPad_A"].GetInt();
+            if (doc.HasMember("mappingPad_B")) mappingPad_B = doc["mappingPad_B"].GetInt();
+            if (doc.HasMember("mappingPad_X")) mappingPad_X = doc["mappingPad_X"].GetInt();
+            if (doc.HasMember("mappingPad_Y")) mappingPad_Y = doc["mappingPad_Y"].GetInt();
+            if (doc.HasMember("mappingPad_RB")) mappingPad_RB = doc["mappingPad_RB"].GetInt();
+            if (doc.HasMember("mappingPad_RT")) mappingPad_RT = doc["mappingPad_RT"].GetInt();
+            if (doc.HasMember("mappingPad_LB")) mappingPad_LB = doc["mappingPad_LB"].GetInt();
+            if (doc.HasMember("mappingPad_LT")) mappingPad_LT = doc["mappingPad_LT"].GetInt();
+            if (doc.HasMember("mappingPad_Up")) mappingPad_Up = doc["mappingPad_Up"].GetInt();
+            if (doc.HasMember("mappingPad_Down")) mappingPad_Down = doc["mappingPad_Down"].GetInt();
+            if (doc.HasMember("mappingPad_Left")) mappingPad_Left = doc["mappingPad_Left"].GetInt();
+            if (doc.HasMember("mappingPad_Right")) mappingPad_Right = doc["mappingPad_Right"].GetInt();
         }
         catch (...) {}
     }
@@ -389,6 +416,26 @@ namespace ActionMenuUI {
             doc.AddMember("advancedMode", advancedMode, allocator);
             doc.AddMember("defaultActionsGenerated", defaultActionsGenerated, allocator);
             doc.AddMember("showDebugLogs", showDebugLogs, allocator);
+
+            doc.AddMember("useHook", useHook, allocator);
+
+            doc.AddMember("motionPC_Up", motionPC_Up, allocator);
+            doc.AddMember("motionPC_Down", motionPC_Down, allocator);
+            doc.AddMember("motionPC_Left", motionPC_Left, allocator);
+            doc.AddMember("motionPC_Right", motionPC_Right, allocator);
+
+            doc.AddMember("mappingPad_A", mappingPad_A, allocator);
+            doc.AddMember("mappingPad_B", mappingPad_B, allocator);
+            doc.AddMember("mappingPad_X", mappingPad_X, allocator);
+            doc.AddMember("mappingPad_Y", mappingPad_Y, allocator);
+            doc.AddMember("mappingPad_RB", mappingPad_RB, allocator);
+            doc.AddMember("mappingPad_RT", mappingPad_RT, allocator);
+            doc.AddMember("mappingPad_LB", mappingPad_LB, allocator);
+            doc.AddMember("mappingPad_LT", mappingPad_LT, allocator);
+            doc.AddMember("mappingPad_Up", mappingPad_Up, allocator);
+            doc.AddMember("mappingPad_Down", mappingPad_Down, allocator);
+            doc.AddMember("mappingPad_Left", mappingPad_Left, allocator);
+            doc.AddMember("mappingPad_Right", mappingPad_Right, allocator);
 
             std::ofstream ofs(SETTINGS_PATH);
             rapidjson::OStreamWrapper osw(ofs);
@@ -467,7 +514,6 @@ namespace ActionMenuUI {
             std::string actName = item.HasMember("name") ? item["name"].GetString() : "New Action";
             strncpy_s(entry.name, actName.c_str(), sizeof(entry.name) - 1);
 
-            // PRIORIDADE: 1. Busca no Cache -> 2. Tenta do Json atual -> 3. Joga pro final
             int order = 999999;
             if (actionCache.find(actName) != actionCache.end()) {
                 order = actionCache[actName];
@@ -534,7 +580,6 @@ namespace ActionMenuUI {
                 }
             }
 
-
             for (const auto& targetFile : uniqueFiles) {
                 rapidjson::Document doc;
                 doc.SetArray();
@@ -586,7 +631,6 @@ namespace ActionMenuUI {
                 ofs.close();
             }
 
-            // Cleanup: Deletes files that were emptied/renamed in the menu
             for (const auto& loadedFile : loadedInputFiles) {
                 if (std::find(uniqueFiles.begin(), uniqueFiles.end(), loadedFile) == uniqueFiles.end()) {
                     std::string path = INPUTS_DIR + loadedFile;
@@ -667,7 +711,7 @@ namespace ActionMenuUI {
 
                 if (gFile == targetFile) {
                     rapidjson::Value obj(rapidjson::kObjectType);
-                    obj.AddMember("order", static_cast<int>(i), allocator); 
+                    obj.AddMember("order", static_cast<int>(i), allocator);
                     obj.AddMember("name", rapidjson::StringRef(g.name), allocator);
                     obj.AddMember("requiredAccuracy", g.requiredAccuracy, allocator);
 
@@ -711,14 +755,12 @@ namespace ActionMenuUI {
         if (keyID == InputManagerAPI::VKEY_DIR_DOWNLEFT) return "DOWN-LEFT";
         if (keyID == InputManagerAPI::VKEY_DIR_DOWNRIGHT) return "DOWN-RIGHT";
 
-        // Se for PC
         int pcIdx = GetIndexFromID(keyID, pcKeyIDs, std::size(pcKeyIDs));
         if (pcIdx != 0) return std::string(pcKeyNames[pcIdx]);
-        // Se for Gamepad
         int padIdx = GetIndexFromID(keyID, gamepadKeyIDs, std::size(gamepadKeyIDs));
         if (padIdx != 0) return std::string(gamepadKeyNames[padIdx]);
 
-        return "Unknown";
+        return GetLoc("common.unknown", "Unknown");
     }
 
     inline void LoadMotionsFromJson() {
@@ -815,10 +857,8 @@ namespace ActionMenuUI {
             }
         }
         loadedMotionFiles = uniqueFiles;
-        SaveCacheToJson(); 
+        SaveCacheToJson();
     }
-
-
 
     inline void ShowDelayTooltip() {
         if (ImGuiMCP::IsItemHovered()) {
@@ -940,6 +980,65 @@ namespace ActionMenuUI {
         ImGuiMCP::Text("%s", GetLoc("motion.title", "Input Manager - Motion Inputs (Fighting Game Style)"));
         ImGuiMCP::Separator(); ImGuiMCP::Spacing();
 
+        // -------------------------------------------------------------
+        // NOVO: MAPEAMENTO PARA TECLADO / GAMEPAD
+        // -------------------------------------------------------------
+        if (ImGuiMCP::CollapsingHeader(GetLoc("motion.map_header", "Global Capture Settings (Movement and Gamepad)"))) {
+            ImGuiMCP::Indent(); ImGuiMCP::Spacing();
+            ImGuiMCP::TextColored({ 0.5f, 1.0f, 0.5f, 1.0f }, "%s", GetLoc("motion.map_pc", "PC Movement Keys (Converts letters to Arrows)"));
+            ImGuiMCP::TextDisabled("%s", GetLoc("motion.map_pc_desc", "Press these keys during Motion recording to generate Direction inputs."));
+
+            ImGuiMCP::PushItemWidth(200.0f);
+            int upIdx = GetIndexFromID(motionPC_Up, pcKeyIDs, std::size(pcKeyIDs));
+            if (SearchableCombo("Up##motUp", &upIdx, pcKeyNames, std::size(pcKeyNames))) { motionPC_Up = pcKeyIDs[upIdx]; SaveSettingsToJson(); }
+
+            int downIdx = GetIndexFromID(motionPC_Down, pcKeyIDs, std::size(pcKeyIDs));
+            if (SearchableCombo("Down##motDown", &downIdx, pcKeyNames, std::size(pcKeyNames))) { motionPC_Down = pcKeyIDs[downIdx]; SaveSettingsToJson(); }
+
+            int leftIdx = GetIndexFromID(motionPC_Left, pcKeyIDs, std::size(pcKeyIDs));
+            if (SearchableCombo("Left##motLeft", &leftIdx, pcKeyNames, std::size(pcKeyNames))) { motionPC_Left = pcKeyIDs[leftIdx]; SaveSettingsToJson(); }
+
+            int rightIdx = GetIndexFromID(motionPC_Right, pcKeyIDs, std::size(pcKeyIDs));
+            if (SearchableCombo("Right##motRight", &rightIdx, pcKeyNames, std::size(pcKeyNames))) { motionPC_Right = pcKeyIDs[rightIdx]; SaveSettingsToJson(); }
+            ImGuiMCP::PopItemWidth();
+
+            ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
+
+            ImGuiMCP::TextColored({ 0.5f, 0.8f, 1.0f, 1.0f }, "%s", GetLoc("motion.map_pad", "Record Gamepad using Keyboard (Mapping)"));
+            ImGuiMCP::TextDisabled("%s", GetLoc("motion.map_pad_desc", "When recording a Gamepad sequence, pressing these keys will simulate the equivalent Gamepad button."));
+
+            auto renderPadMap = [](const char* label, int& val) {
+                int idx = GetIndexFromID(val, pcKeyIDs, std::size(pcKeyIDs));
+                if (SearchableCombo(label, &idx, pcKeyNames, std::size(pcKeyNames))) { val = pcKeyIDs[idx]; SaveSettingsToJson(); }
+                };
+
+            ImGuiMCP::PushItemWidth(200.0f);
+            if (ImGuiMCP::BeginTable("PadMapTable", 2)) {
+                ImGuiMCP::TableNextRow();
+                ImGuiMCP::TableSetColumnIndex(0); renderPadMap("A / Cross##mapA", mappingPad_A);
+                ImGuiMCP::TableSetColumnIndex(1); renderPadMap("B / Circle##mapB", mappingPad_B);
+                ImGuiMCP::TableNextRow();
+                ImGuiMCP::TableSetColumnIndex(0); renderPadMap("X / Square##mapX", mappingPad_X);
+                ImGuiMCP::TableSetColumnIndex(1); renderPadMap("Y / Triangle##mapY", mappingPad_Y);
+                ImGuiMCP::TableNextRow();
+                ImGuiMCP::TableSetColumnIndex(0); renderPadMap("RB / R1##mapRB", mappingPad_RB);
+                ImGuiMCP::TableSetColumnIndex(1); renderPadMap("RT / R2##mapRT", mappingPad_RT);
+                ImGuiMCP::TableNextRow();
+                ImGuiMCP::TableSetColumnIndex(0); renderPadMap("LB / L1##mapLB", mappingPad_LB);
+                ImGuiMCP::TableSetColumnIndex(1); renderPadMap("LT / L2##mapLT", mappingPad_LT);
+                ImGuiMCP::TableNextRow();
+                ImGuiMCP::TableSetColumnIndex(0); renderPadMap("D-Pad Up##mapDUp", mappingPad_Up);
+                ImGuiMCP::TableSetColumnIndex(1); renderPadMap("D-Pad Down##mapDDown", mappingPad_Down);
+                ImGuiMCP::TableNextRow();
+                ImGuiMCP::TableSetColumnIndex(0); renderPadMap("D-Pad Left##mapDLeft", mappingPad_Left);
+                ImGuiMCP::TableSetColumnIndex(1); renderPadMap("D-Pad Right##mapDRight", mappingPad_Right);
+                ImGuiMCP::EndTable();
+            }
+            ImGuiMCP::PopItemWidth();
+            ImGuiMCP::Unindent(); ImGuiMCP::Spacing();
+        }
+        ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
+
         bool hasMotionConflict = false;
         std::string motionErrorMsg;
 
@@ -1012,6 +1111,39 @@ namespace ActionMenuUI {
         static bool m_activePad = false;
         static std::chrono::steady_clock::time_point m_uiStartTime;
 
+        // Variaveis e Arrays para a interface de edição
+        static std::vector<std::string> pcOptStrs;
+        static std::vector<const char*> pcOptCStrs;
+        static std::vector<uint32_t> pcOptIDs;
+
+        static std::vector<std::string> padOptStrs;
+        static std::vector<const char*> padOptCStrs;
+        static std::vector<uint32_t> padOptIDs;
+
+        static int m_editIndex = -1;
+        static bool m_editIsPad = false;
+
+        // Inicializa as listas de opções de edição apenas uma vez
+        if (pcOptStrs.empty()) {
+            const uint32_t dirIDs[] = {
+                InputManagerAPI::VKEY_DIR_UP, InputManagerAPI::VKEY_DIR_DOWN, InputManagerAPI::VKEY_DIR_LEFT, InputManagerAPI::VKEY_DIR_RIGHT,
+                InputManagerAPI::VKEY_DIR_UPLEFT, InputManagerAPI::VKEY_DIR_UPRIGHT, InputManagerAPI::VKEY_DIR_DOWNLEFT, InputManagerAPI::VKEY_DIR_DOWNRIGHT
+            };
+            const char* dirNames[] = {
+                "UP", "DOWN", "LEFT", "RIGHT", "UP-LEFT", "UP-RIGHT", "DOWN-LEFT", "DOWN-RIGHT"
+            };
+
+            pcOptStrs.push_back("None"); pcOptIDs.push_back(0);
+            for (int i = 0; i < 8; i++) { pcOptStrs.push_back(dirNames[i]); pcOptIDs.push_back(dirIDs[i]); }
+            for (size_t i = 1; i < std::size(pcKeyNames); i++) { pcOptStrs.push_back(pcKeyNames[i]); pcOptIDs.push_back(pcKeyIDs[i]); }
+            for (const auto& s : pcOptStrs) pcOptCStrs.push_back(s.c_str());
+
+            padOptStrs.push_back("None"); padOptIDs.push_back(0);
+            for (int i = 0; i < 8; i++) { padOptStrs.push_back(dirNames[i]); padOptIDs.push_back(dirIDs[i]); }
+            for (size_t i = 1; i < std::size(gamepadKeyNames); i++) { padOptStrs.push_back(gamepadKeyNames[i]); padOptIDs.push_back(gamepadKeyIDs[i]); }
+            for (const auto& s : padOptStrs) padOptCStrs.push_back(s.c_str());
+        }
+
         auto keyMgr = PluginLogic::KeyManager::GetSingleton();
         bool isCapturing = (m_state != M_NONE && m_activeIndex >= 0 && m_activeIndex < motionList.size());
 
@@ -1029,7 +1161,7 @@ namespace ActionMenuUI {
                         m_state = M_RECORDING;
                     }
                     else {
-                        keyMgr->StartMotionTesting(m_activeIndex);
+                        keyMgr->StartMotionTesting(m_activeIndex, m_activePad);
                         m_state = M_TESTING;
                     }
                 }
@@ -1126,31 +1258,142 @@ namespace ActionMenuUI {
                 ImGuiMCP::PopItemWidth();
                 ImGuiMCP::Spacing();
 
+                // -------------------------------------------------------------
+                // PC Sequence Display & Editing
+                // -------------------------------------------------------------
                 ImGuiMCP::TextColored({ 0.5f, 1.0f, 0.5f, 1.0f }, "%s", GetLoc("motion.pc_seq", "PC Sequence:"));
-                std::string pcStr = "";
-                for (uint32_t k : motion.pcSequence) pcStr += "[" + FormatMotionKey(k) + "] ";
-                ImGuiMCP::TextWrapped("%s", pcStr.empty() ? GetLoc("common.none", "None") : pcStr.c_str());
 
-                if (ImGuiMCP::Button(GetLoc("motion.rec_pc", "Record PC"))) {
-                    m_activeIndex = static_cast<int>(i); m_activePad = false; m_state = M_WAITING_REC;
+                if (m_editIndex == static_cast<int>(i) && !m_editIsPad) {
+                    ImGuiMCP::Indent();
+                    for (size_t seqIdx = 0; seqIdx < motion.pcSequence.size(); ++seqIdx) {
+                        ImGuiMCP::PushID(static_cast<int>(seqIdx));
+                        uint32_t currentKey = motion.pcSequence[seqIdx];
+
+                        int currentOptionIdx = 0;
+                        for (size_t opt = 0; opt < pcOptIDs.size(); ++opt) {
+                            if (pcOptIDs[opt] == currentKey) { currentOptionIdx = static_cast<int>(opt); break; }
+                        }
+
+                        ImGuiMCP::Text("%d:", (int)seqIdx + 1);
+                        ImGuiMCP::SameLine();
+                        ImGuiMCP::PushItemWidth(140.0f);
+                        if (SearchableCombo("##pcKeyEdit", &currentOptionIdx, pcOptCStrs.data(), pcOptCStrs.size())) {
+                            motion.pcSequence[seqIdx] = pcOptIDs[currentOptionIdx];
+                        }
+                        ImGuiMCP::PopItemWidth();
+
+                        ImGuiMCP::SameLine();
+                        ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_Button, { 0.6f, 0.2f, 0.2f, 1.0f });
+                        if (ImGuiMCP::Button("X")) {
+                            motion.pcSequence.erase(motion.pcSequence.begin() + seqIdx);
+                            seqIdx--;
+                        }
+                        ImGuiMCP::PopStyleColor();
+
+                        // 2 items per row max for UI cleanliness
+                        if ((seqIdx + 1) % 2 != 0 && seqIdx != motion.pcSequence.size() - 1) ImGuiMCP::SameLine();
+
+                        ImGuiMCP::PopID();
+                    }
+                    ImGuiMCP::Spacing();
+                    if (ImGuiMCP::Button(GetLoc("common.add_input", "+ Add Input"))) {
+                        if (motion.pcSequence.size() < 20) motion.pcSequence.push_back(0); // 0 = None
+                    }
+                    ImGuiMCP::SameLine();
+                    ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_Button, { 0.1f, 0.5f, 0.1f, 1.0f });
+                    if (ImGuiMCP::Button(GetLoc("common.done", "Done Editing"))) {
+                        // Remove "None" inputs before finalizing
+                        motion.pcSequence.erase(std::remove(motion.pcSequence.begin(), motion.pcSequence.end(), 0), motion.pcSequence.end());
+                        m_editIndex = -1;
+                    }
+                    ImGuiMCP::PopStyleColor();
+                    ImGuiMCP::Unindent();
                 }
-                ImGuiMCP::SameLine();
-                if (ImGuiMCP::Button(GetLoc("motion.test_pc", "Test PC"))) {
-                    m_activeIndex = static_cast<int>(i); m_activePad = false; m_state = M_WAITING_TEST;
+                else {
+                    std::string pcStr = "";
+                    for (uint32_t k : motion.pcSequence) pcStr += "[" + FormatMotionKey(k) + "] ";
+                    ImGuiMCP::TextWrapped("%s", pcStr.empty() ? GetLoc("common.none", "None") : pcStr.c_str());
+
+                    if (ImGuiMCP::Button(GetLoc("motion.rec_pc", "Record PC"))) {
+                        m_activeIndex = static_cast<int>(i); m_activePad = false; m_state = M_WAITING_REC; m_editIndex = -1;
+                    }
+                    ImGuiMCP::SameLine();
+                    if (ImGuiMCP::Button(GetLoc("motion.test_pc", "Test PC"))) {
+                        m_activeIndex = static_cast<int>(i); m_activePad = false; m_state = M_WAITING_TEST; m_editIndex = -1;
+                    }
+                    ImGuiMCP::SameLine();
+                    if (ImGuiMCP::Button(GetLoc("motion.edit_pc", "Edit Sequence##pc"))) {
+                        m_editIndex = static_cast<int>(i); m_editIsPad = false; m_activeIndex = -1; m_state = M_NONE;
+                    }
                 }
                 ImGuiMCP::Spacing();
 
+                // -------------------------------------------------------------
+                // Gamepad Sequence Display & Editing
+                // -------------------------------------------------------------
                 ImGuiMCP::TextColored({ 0.5f, 1.0f, 0.5f, 1.0f }, "%s", GetLoc("motion.pad_seq", "Gamepad Sequence:"));
-                std::string padStr = "";
-                for (uint32_t k : motion.padSequence) padStr += "[" + FormatMotionKey(k) + "] ";
-                ImGuiMCP::TextWrapped("%s", padStr.empty() ? GetLoc("common.none", "None") : padStr.c_str());
 
-                if (ImGuiMCP::Button(GetLoc("motion.rec_pad", "Record Gamepad"))) {
-                    m_activeIndex = static_cast<int>(i); m_activePad = true; m_state = M_WAITING_REC;
+                if (m_editIndex == static_cast<int>(i) && m_editIsPad) {
+                    ImGuiMCP::Indent();
+                    for (size_t seqIdx = 0; seqIdx < motion.padSequence.size(); ++seqIdx) {
+                        ImGuiMCP::PushID(static_cast<int>(seqIdx));
+                        uint32_t currentKey = motion.padSequence[seqIdx];
+
+                        int currentOptionIdx = 0;
+                        for (size_t opt = 0; opt < padOptIDs.size(); ++opt) {
+                            if (padOptIDs[opt] == currentKey) { currentOptionIdx = static_cast<int>(opt); break; }
+                        }
+
+                        ImGuiMCP::Text("%d:", (int)seqIdx + 1);
+                        ImGuiMCP::SameLine();
+                        ImGuiMCP::PushItemWidth(140.0f);
+                        if (SearchableCombo("##padKeyEdit", &currentOptionIdx, padOptCStrs.data(), padOptCStrs.size())) {
+                            motion.padSequence[seqIdx] = padOptIDs[currentOptionIdx];
+                        }
+                        ImGuiMCP::PopItemWidth();
+
+                        ImGuiMCP::SameLine();
+                        ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_Button, { 0.6f, 0.2f, 0.2f, 1.0f });
+                        if (ImGuiMCP::Button("X")) {
+                            motion.padSequence.erase(motion.padSequence.begin() + seqIdx);
+                            seqIdx--;
+                        }
+                        ImGuiMCP::PopStyleColor();
+
+                        if ((seqIdx + 1) % 2 != 0 && seqIdx != motion.padSequence.size() - 1) ImGuiMCP::SameLine();
+
+                        ImGuiMCP::PopID();
+                    }
+                    ImGuiMCP::Spacing();
+                    if (ImGuiMCP::Button(GetLoc("common.add_input", "+ Add Input"))) {
+                        if (motion.padSequence.size() < 20) motion.padSequence.push_back(0); // 0 = None
+                    }
+                    ImGuiMCP::SameLine();
+                    ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_Button, { 0.1f, 0.5f, 0.1f, 1.0f });
+                    if (ImGuiMCP::Button(GetLoc("common.done", "Done Editing"))) {
+                        // Remove "None" inputs before finalizing
+                        motion.padSequence.erase(std::remove(motion.padSequence.begin(), motion.padSequence.end(), 0), motion.padSequence.end());
+                        m_editIndex = -1;
+                    }
+                    ImGuiMCP::PopStyleColor();
+                    ImGuiMCP::Unindent();
                 }
-                ImGuiMCP::SameLine();
-                if (ImGuiMCP::Button(GetLoc("motion.test_pad", "Test Gamepad"))) {
-                    m_activeIndex = static_cast<int>(i); m_activePad = true; m_state = M_WAITING_TEST;
+                else {
+                    std::string padStr = "";
+                    for (uint32_t k : motion.padSequence) padStr += "[" + FormatMotionKey(k) + "] ";
+                    ImGuiMCP::TextWrapped("%s", padStr.empty() ? GetLoc("common.none", "None") : padStr.c_str());
+
+                    if (ImGuiMCP::Button(GetLoc("motion.rec_pad", "Record Gamepad"))) {
+                        m_activeIndex = static_cast<int>(i); m_activePad = true; m_state = M_WAITING_REC; m_editIndex = -1;
+                    }
+                    ImGuiMCP::SameLine();
+                    if (ImGuiMCP::Button(GetLoc("motion.test_pad", "Test Gamepad"))) {
+                        m_activeIndex = static_cast<int>(i); m_activePad = true; m_state = M_WAITING_TEST; m_editIndex = -1;
+                    }
+                    ImGuiMCP::SameLine();
+                    if (ImGuiMCP::Button(GetLoc("motion.edit_pad", "Edit Sequence##pad"))) {
+                        m_editIndex = static_cast<int>(i); m_editIsPad = true; m_activeIndex = -1; m_state = M_NONE;
+                    }
                 }
 
                 std::vector<PluginLogic::ModListener> activeListeners;
@@ -1613,10 +1856,10 @@ namespace ActionMenuUI {
                 if (lastScore >= 0.0f && testingIndex == -1 && recordingIndex == -1) {
                     ImGuiMCP::Spacing();
                     if (lastScore >= gesture.requiredAccuracy) {
-                        ImGuiMCP::TextColored({ 0.2f, 1.0f, 0.2f, 1.0f }, "Last Test: %.1f%% Accuracy (Requires: %.1f%%)", lastScore * 100.0f, gesture.requiredAccuracy * 100.0f);
+                        ImGuiMCP::TextColored({ 0.2f, 1.0f, 0.2f, 1.0f }, GetLoc("gesture.test_result", "Last Test: %.1f%% Accuracy (Requires: %.1f%%)"), lastScore * 100.0f, gesture.requiredAccuracy * 100.0f);
                     }
                     else {
-                        ImGuiMCP::TextColored({ 1.0f, 0.2f, 0.2f, 1.0f }, "Last Test: %.1f%% Accuracy (Requires: %.1f%%)", lastScore * 100.0f, gesture.requiredAccuracy * 100.0f);
+                        ImGuiMCP::TextColored({ 1.0f, 0.2f, 0.2f, 1.0f }, GetLoc("gesture.test_result", "Last Test: %.1f%% Accuracy (Requires: %.1f%%)"), lastScore * 100.0f, gesture.requiredAccuracy * 100.0f);
                     }
                 }
 
@@ -1645,9 +1888,12 @@ namespace ActionMenuUI {
                 const auto& b = actionList[j];
 
                 if (SanitizeFileName(a.name) == SanitizeFileName(b.name)) {
-                    outErrorMsg = "DUPLICATE NAME: Actions '" + std::string(a.name) + "' and '" + std::string(b.name) + "' will generate the same file. Please choose unique names.";
+                    char errBuf[512];
+                    snprintf(errBuf, sizeof(errBuf), GetLoc("error.dup_action_name", "DUPLICATE NAME: Actions '%s' and '%s' will generate the same file. Please choose unique names."), a.name, b.name);
+                    outErrorMsg = errBuf;
                     return true;
                 }
+
                 auto CheckComboConflict = [](
                     int aMKey, int aMAct, int aMTap, int aModKey, int aModAct, int aModTap, int aGest,
                     int bMKey, int bMAct, int bMTap, int bModKey, int bModAct, int bModTap, int bGest) {
@@ -1658,7 +1904,10 @@ namespace ActionMenuUI {
 
                         auto make_key = [](int key, int act, int tap, int gest) -> K {
                             if (act == 0) return { 0, 0, 0, -1 }; // Ignore
-                            int normAct = (act == 4) ? 2 : act; // Normaliza Press (4) para Hold (2)
+
+                            // AJUSTE: Só normaliza Press (4) para Hold (2) se o modo avançado NÃO estiver ativo
+                            int normAct = (!advancedMode && act == 4) ? 2 : act;
+
                             if (normAct == 3) return { 0, 3, 0, gest }; // Gesto ignora a tecla real na checagem cruzada
                             return { key, normAct, (normAct == 1) ? tap : 1, -1 };
                             };
@@ -1686,7 +1935,10 @@ namespace ActionMenuUI {
                 if (CheckComboConflict(
                     a.pcMainKey, a.pcMainAction, a.pcMainTapCount, a.pcModifierKey, a.pcModAction, a.pcModTapCount, a.gestureIndex,
                     b.pcMainKey, b.pcMainAction, b.pcMainTapCount, b.pcModifierKey, b.pcModAction, b.pcModTapCount, b.gestureIndex)) {
-                    outErrorMsg = "PC CONFLICT: '" + std::string(a.name) + "' and '" + std::string(b.name) + "' use the exact same keys, states, and tap counts.";
+
+                    char errBuf[512];
+                    snprintf(errBuf, sizeof(errBuf), GetLoc("error.conflict_pc", "PC CONFLICT: '%s' and '%s' use the exact same keys, states, and tap counts."), a.name, b.name);
+                    outErrorMsg = errBuf;
                     return true;
                 }
 
@@ -1694,7 +1946,10 @@ namespace ActionMenuUI {
                 if (CheckComboConflict(
                     a.gamepadMainKey, a.gamepadMainAction, a.gamepadMainTapCount, a.gamepadModifierKey, a.gamepadModAction, a.gamepadModTapCount, a.gestureIndex,
                     b.gamepadMainKey, b.gamepadMainAction, b.gamepadMainTapCount, b.gamepadModifierKey, b.gamepadModAction, b.gamepadModTapCount, b.gestureIndex)) {
-                    outErrorMsg = "GAMEPAD CONFLICT: '" + std::string(a.name) + "' and '" + std::string(b.name) + "' use the exact same keys, states, and tap counts.";
+
+                    char errBuf[512];
+                    snprintf(errBuf, sizeof(errBuf), GetLoc("error.conflict_pad", "GAMEPAD CONFLICT: '%s' and '%s' use the exact same keys, states, and tap counts."), a.name, b.name);
+                    outErrorMsg = errBuf;
                     return true;
                 }
             }
@@ -2081,7 +2336,7 @@ namespace ActionMenuUI {
                     ImGuiMCP::BeginDisabled(action.gamepadMainKey == 0);
                     if (ImGuiMCP::BeginCombo("##padMAct", GetStateName(action.gamepadMainAction))) {
                         for (int s = 0; s < 5; ++s) {
-                            if (s == 3) continue; 
+                            if (s == 3) continue;
                             if (ImGuiMCP::Selectable(GetStateName(s), action.gamepadMainAction == s)) action.gamepadMainAction = s;
                         }
                         ImGuiMCP::EndCombo();
@@ -2196,7 +2451,7 @@ namespace ActionMenuUI {
                             std::string res = "";
                             for (size_t k = 0; k < validList.size(); ++k) {
                                 if (validList[k] >= 0 && validList[k] <= 4) {
-                                    res += GetStateName(validList[k]); 
+                                    res += GetStateName(validList[k]);
                                     if (k < validList.size() - 1) res += ", ";
                                 }
                             }
@@ -2221,7 +2476,6 @@ namespace ActionMenuUI {
     }
 
     inline void GenerateDefaultActions() {
-        // Se já foi gerado no passado (salvo no json), não cria novamente.
         if (defaultActionsGenerated) return;
 
         std::vector<std::string> defaultNames = {
@@ -2229,9 +2483,9 @@ namespace ActionMenuUI {
             "Jump", "Sprint", "Sneak", "Shout", "Ready Weapon", "Interact", "Dodge", "Target Lock",
             "Menu", "Journal", "Wait", "Auto Move", "Toggle POV", "Quick Save", "Quick Load", "Quick Map",
             "Quick Magic", "Quick Inventory", "Quick Stats", "Tween Menu", "Favorites", "Console",
-            "Use Potion", "Use Poison", "Bash", "Heavy Attack", "Light Attack", "Camera Lock", 
-            "Zoom In", "Zoom Out", "Next Target", "Previous Target", "Combo 1", "Combo 2", "Combo 3", 
-            "Special Move 1", "Special Move 2", "Special Move 3", "Special Move 4", "Ultimate", "Heal Companion", 
+            "Use Potion", "Use Poison", "Bash", "Heavy Attack", "Light Attack", "Camera Lock",
+            "Zoom In", "Zoom Out", "Next Target", "Previous Target", "Combo 1", "Combo 2", "Combo 3",
+            "Special Move 1", "Special Move 2", "Special Move 3", "Special Move 4", "Ultimate", "Heal Companion",
             "Command Pet", "Whistle", "Quick Slot 1", "Quick Slot 2"
         };
 
@@ -2244,12 +2498,36 @@ namespace ActionMenuUI {
         defaultActionsGenerated = true;
 
         SaveSettingsToJson();
-        SaveActionsToJson(); 
+        SaveActionsToJson();
     }
 
     inline void RenderDebugMenu() {
-        ImGuiMCP::Text("%s", GetLoc("debug.title", "Input Manager - Debug"));
+        ImGuiMCP::Text("%s", GetLoc("debug.title", "Input Manager - Debug / Advanced"));
         ImGuiMCP::Separator(); ImGuiMCP::Spacing();
+
+        // -------------------------------------------------------------
+        // NOVO: DROPDOWN PARA HOOK vs SINK
+        // -------------------------------------------------------------
+        ImGuiMCP::TextColored({ 0.8f, 0.8f, 0.5f, 1.0f }, "%s", GetLoc("debug.hook_title", "Input Processor Configuration"));
+        const char* inputMethods[] = { GetLoc("debug.method_sink", "Event Sink"), GetLoc("debug.method_hook", "Input Hook") };
+        int currentMethod = useHook ? 1 : 0;
+
+        ImGuiMCP::PushItemWidth(350.0f);
+        if (ImGuiMCP::BeginCombo(GetLoc("debug.input_method", "Capture Method"), inputMethods[currentMethod])) {
+            for (int i = 0; i < 2; i++) {
+                bool isSelected = (currentMethod == i);
+                if (ImGuiMCP::Selectable(inputMethods[i], isSelected)) {
+                    useHook = (i == 1);
+                    SaveSettingsToJson();
+                }
+                if (isSelected) ImGuiMCP::SetItemDefaultFocus();
+            }
+            ImGuiMCP::EndCombo();
+        }
+        ImGuiMCP::PopItemWidth();
+        ImGuiMCP::TextDisabled("%s", GetLoc("debug.hook_desc", "Change only if your buttons are not registering. The Hook is more invasive."));
+        ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
+
 
         if (ImGuiMCP::Checkbox(GetLoc("debug.show_log", "Show Log in Hud and on log"), &showDebugLogs)) {
             SaveSettingsToJson();
@@ -2272,6 +2550,6 @@ namespace ActionMenuUI {
         SKSEMenuFramework::AddSectionItem(GetLoc("menu.tab_motions", "Motion Inputs"), RenderMotionMenu);
         SKSEMenuFramework::AddSectionItem(GetLoc("menu.tab_gestures", "Gestures"), RenderGesturesMenu);
         SKSEMenuFramework::AddSectionItem(GetLoc("menu.tab_dashboard", "Inputs in use"), RenderDashboardMenu);
-        SKSEMenuFramework::AddSectionItem(GetLoc("menu.tab_debug", "Debug"), RenderDebugMenu);
+        SKSEMenuFramework::AddSectionItem(GetLoc("menu.tab_debug", "Debug / Advanced"), RenderDebugMenu);
     }
 }

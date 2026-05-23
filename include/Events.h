@@ -67,15 +67,20 @@ namespace PluginLogic {
         std::chrono::steady_clock::time_point timestamp;
     };
 
-    class KeyManager {
+    class KeyManager : public RE::BSTEventSink<RE::InputEvent*> {
     public:
         static KeyManager* GetSingleton() {
             static KeyManager singleton;
             return &singleton;
         }
 
+        void RegisterSink();
         void RegisterAction(const std::string& name, ComboKey combo, std::function<void()> callback, std::function<void()> releaseCallback = nullptr);
+        bool ProcessCoreLogic(RE::InputEvent* a_event);
         bool ProcessInput(RE::InputEvent* a_event);
+        RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* a_event, RE::BSTEventSource<RE::InputEvent*>* a_source) override;
+
+        void ResetAllInputs();
         void ClearStates();
         void ClearBindings();
         void SortBindings();
@@ -95,7 +100,7 @@ namespace PluginLogic {
         bool IsRecordingMotion() const { return _isRecordingMotion; }
         std::vector<uint32_t> GetRecordedMotion() const { return _tempMotionSequence; }
 
-        void StartMotionTesting(int motionIndex);
+        void StartMotionTesting(int motionIndex, bool isGamepad);
         bool GetMotionTestSuccess() const { return _motionTestSuccess; }
         void ResetMotionTest() { _motionTestSuccess = false; _testingMotionIndex = -1; }
         bool IsTestingMotion() const { return _testingMotionIndex != -1; }
@@ -142,10 +147,5 @@ namespace PluginLogic {
         float _virtualY = 0.0f;
     };
 
-    static uint32_t DefaultkeyUp = RE::BSKeyboardDevice::Keys::kW;
-    static uint32_t DefaultkeyDown = RE::BSKeyboardDevice::Keys::kS;
-    static uint32_t DefaultkeyLeft = RE::BSKeyboardDevice::Keys::kA;
-    static uint32_t DefaultkeyRight = RE::BSKeyboardDevice::Keys::kD;
-    void GetMovementKeys();
 }
 

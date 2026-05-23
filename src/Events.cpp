@@ -10,6 +10,424 @@ namespace PluginLogic {
         _bindings.push_back({ name, combo, callback, releaseCallback });
     }
 
+    bool KeyManager::ProcessCoreLogic(RE::InputEvent* a_event) {
+        bool consumed = false;
+        auto now = std::chrono::steady_clock::now();
+
+        // --- LIMPEZA DO BUFFER ---
+        while (!_inputHistory.empty() && std::chrono::duration<float>(now - _inputHistory.front().timestamp).count() > 4.0f) {
+            _inputHistory.pop_front();
+        }
+
+        // --- TIMER DE GRAVAÇÃO ---
+        if (_isRecordingMotion && _recordingMotionIndex >= 0) {
+            float maxTime = ActionMenuUI::motionList[_recordingMotionIndex].timeWindow;
+            if (std::chrono::duration<float>(now - _recordingStartTime).count() > maxTime) {
+                _isRecordingMotion = false;
+            }
+        }
+        if (_testingMotionIndex >= 0) {
+            float maxTime = ActionMenuUI::motionList[_testingMotionIndex].timeWindow;
+            if (std::chrono::duration<float>(now - _recordingStartTime).count() > maxTime) {
+                _testingMotionIndex = -1;
+            }
+        }
+
+        // Percorre a Linked List de eventos de entrada desse exato frame
+        for (auto* e = a_event; e != nullptr; e = e->next) {
+
+            bool newUp = _dirUp, newDown = _dirDown, newLeft = _dirLeft, newRight = _dirRight;
+            bool dirChanged = false;
+            uint32_t rawKeyID = 0;
+            bool isGamepadEvent = (e->GetDevice() == RE::INPUT_DEVICE::kGamepad);
+            bool isKeyDown = false;
+
+            // 1. AVALIAÇÃO DE DIREÇÕES E BOTÕES BRUTOS
+            if (e->GetEventType() == RE::INPUT_EVENT_TYPE::kThumbstick) {
+                auto* stick = static_cast<RE::ThumbstickEvent*>(e);
+                if (stick->IsLeft()) {
+                    newUp = stick->yValue > 0.5f;
+                    newDown = stick->yValue < -0.5f;
+                    newLeft = stick->xValue < -0.5f;
+                    newRight = stick->xValue > 0.5f;
+                }
+            }
+            else if (e->GetEventType() == RE::INPUT_EVENT_TYPE::kButton) {
+                auto* btn = static_cast<RE::ButtonEvent*>(e);
+                rawKeyID = GetUnifiedKeyCode(btn);
+                isKeyDown = btn->IsDown();
+
+                if ((_isRecordingMotion || _testingMotionIndex >= 0) && _isRecordingGamepad) {
+                    bool wasMapped = true;
+                    // Se estiver gravando para Gamepad, mapeamos a Tecla do PC digitada para a do Gamepad
+                    if (rawKeyID == ActionMenuUI::mappingPad_A && rawKeyID != 0) rawKeyID = RE::BSWin32GamepadDevice::Keys::kA + 266;
+                    else if (rawKeyID == ActionMenuUI::mappingPad_B && rawKeyID != 0) rawKeyID = RE::BSWin32GamepadDevice::Keys::kB + 266;
+                    else if (rawKeyID == ActionMenuUI::mappingPad_X && rawKeyID != 0) rawKeyID = RE::BSWin32GamepadDevice::Keys::kX + 266;
+                    else if (rawKeyID == ActionMenuUI::mappingPad_Y && rawKeyID != 0) rawKeyID = RE::BSWin32GamepadDevice::Keys::kY + 266;
+                    else if (rawKeyID == ActionMenuUI::mappingPad_RB && rawKeyID != 0) rawKeyID = RE::BSWin32GamepadDevice::Keys::kRightShoulder + 266;
+                    else if (rawKeyID == ActionMenuUI::mappingPad_RT && rawKeyID != 0) rawKeyID = RE::BSWin32GamepadDevice::Keys::kRightTrigger + 266;
+                    else if (rawKeyID == ActionMenuUI::mappingPad_LB && rawKeyID != 0) rawKeyID = RE::BSWin32GamepadDevice::Keys::kLeftShoulder + 266;
+                    else if (rawKeyID == ActionMenuUI::mappingPad_LT && rawKeyID != 0) rawKeyID = RE::BSWin32GamepadDevice::Keys::kLeftTrigger + 266;
+                    else if (rawKeyID == ActionMenuUI::mappingPad_Up && rawKeyID != 0) rawKeyID = RE::BSWin32GamepadDevice::Keys::kUp + 266;
+                    else if (rawKeyID == ActionMenuUI::mappingPad_Down && rawKeyID != 0) rawKeyID = RE::BSWin32GamepadDevice::Keys::kDown + 266;
+                    else if (rawKeyID == ActionMenuUI::mappingPad_Left && rawKeyID != 0) rawKeyID = RE::BSWin32GamepadDevice::Keys::kLeft + 266;
+                    else if (rawKeyID == ActionMenuUI::mappingPad_Right && rawKeyID != 0) rawKeyID = RE::BSWin32GamepadDevice::Keys::kRight + 266;
+                    // Permite que as teclas do "PC Movement Keys" gerem inputs direcionais válidos para a gravação do Gamepad!
+                    else if (rawKeyID == ActionMenuUI::motionPC_Up && rawKeyID != 0) wasMapped = true;
+                    else if (rawKeyID == ActionMenuUI::motionPC_Down && rawKeyID != 0) wasMapped = true;
+                    else if (rawKeyID == ActionMenuUI::motionPC_Left && rawKeyID != 0) wasMapped = true;
+                    else if (rawKeyID == ActionMenuUI::motionPC_Right && rawKeyID != 0) wasMapped = true;
+                    else wasMapped = false;
+
+                    if (wasMapped) {
+                        isGamepadEvent = true;
+                    }
+                }
+                // Movimento via User Events
+                auto userEvent = btn->GetUserEvent();
+                if (userEvent != "") {
+                    bool isPressed = btn->IsPressed();
+                    if (userEvent == "Forward" || userEvent == "Up") newUp = isPressed;
+                    else if (userEvent == "Back" || userEvent == "Down") newDown = isPressed;
+                    else if (userEvent == "Strafe Left" || userEvent == "Left") newLeft = isPressed;
+                    else if (userEvent == "Strafe Right" || userEvent == "Right") newRight = isPressed;
+                }
+
+                if (rawKeyID == ActionMenuUI::motionPC_Up && ActionMenuUI::motionPC_Up != 0) newUp = btn->IsDown() || btn->IsHeld();
+                else if (rawKeyID == ActionMenuUI::motionPC_Down && ActionMenuUI::motionPC_Down != 0) newDown = btn->IsDown() || btn->IsHeld();
+                else if (rawKeyID == ActionMenuUI::motionPC_Left && ActionMenuUI::motionPC_Left != 0) newLeft = btn->IsDown() || btn->IsHeld();
+                else if (rawKeyID == ActionMenuUI::motionPC_Right && ActionMenuUI::motionPC_Right != 0) newRight = btn->IsDown() || btn->IsHeld();
+                // D-PAD Gamepad
+                if (rawKeyID == RE::BSWin32GamepadDevice::Keys::kUp + 266) newUp = btn->IsDown() || btn->IsHeld();
+                else if (rawKeyID == RE::BSWin32GamepadDevice::Keys::kDown + 266) newDown = btn->IsDown() || btn->IsHeld();
+                else if (rawKeyID == RE::BSWin32GamepadDevice::Keys::kLeft + 266) newLeft = btn->IsDown() || btn->IsHeld();
+                else if (rawKeyID == RE::BSWin32GamepadDevice::Keys::kRight + 266) newRight = btn->IsDown() || btn->IsHeld();
+            }
+
+            if (newUp != _dirUp || newDown != _dirDown || newLeft != _dirLeft || newRight != _dirRight) {
+                _dirUp = newUp; _dirDown = newDown; _dirLeft = newLeft; _dirRight = newRight;
+                dirChanged = true;
+            }
+
+            // --- REGISTRO NO BUFFER ---
+            uint32_t eventToLog = 0;
+
+            if (dirChanged) {
+                eventToLog = GetDirectionVKey(_dirUp, _dirDown, _dirLeft, _dirRight);
+            }
+            else if (isKeyDown && rawKeyID != 0) {
+                bool isMovementUserEvent = false;
+                if (e->GetEventType() == RE::INPUT_EVENT_TYPE::kButton) {
+                    auto userEvent = static_cast<RE::ButtonEvent*>(e)->GetUserEvent();
+                    if (userEvent == "Forward" || userEvent == "Back" || userEvent == "Strafe Left" || userEvent == "Strafe Right" ||
+                        userEvent == "Up" || userEvent == "Down" || userEvent == "Left" || userEvent == "Right") {
+                        isMovementUserEvent = true;
+                    }
+                }
+
+                if (!isMovementUserEvent &&
+                    rawKeyID != (RE::BSWin32GamepadDevice::Keys::kUp + 266) && rawKeyID != (RE::BSWin32GamepadDevice::Keys::kDown + 266) &&
+                    rawKeyID != (RE::BSWin32GamepadDevice::Keys::kLeft + 266) && rawKeyID != (RE::BSWin32GamepadDevice::Keys::kRight + 266)) {
+                    eventToLog = rawKeyID;
+                }
+            }
+
+            if (eventToLog != 0) {
+                _inputHistory.push_back({ eventToLog, now });
+
+                if (_isRecordingMotion && (isGamepadEvent == _isRecordingGamepad)) {
+                    if (_tempMotionSequence.empty() || _tempMotionSequence.back() != eventToLog) {
+                        _tempMotionSequence.push_back(eventToLog);
+                    }
+                }
+                else if (!_isRecordingMotion) {
+                    CheckMotionMatches(now);
+                }
+            }
+
+            // -------------------------------------------------------------------
+            // EVENTO 1: LEITURA DO RATO (Pincel)
+            // -------------------------------------------------------------------
+            if (e->GetEventType() == RE::INPUT_EVENT_TYPE::kMouseMove && _isDrawingGesture && _activeGestureStick == -1) {
+                auto* mouseEvent = static_cast<RE::MouseMoveEvent*>(e);
+
+                std::lock_guard<std::mutex> lock(_gestureMutex);
+                _virtualX += mouseEvent->mouseInputX;
+                _virtualY += mouseEvent->mouseInputY;
+
+                if (!_activeGesturePath.empty()) {
+                    float dx = _virtualX - _activeGesturePath.back().x;
+                    float dy = _virtualY - _activeGesturePath.back().y;
+                    if (dx * dx + dy * dy > 4.0f) {
+                        _activeGesturePath.push_back({ _virtualX, _virtualY });
+                    }
+                }
+                else {
+                    _activeGesturePath.push_back({ _virtualX, _virtualY });
+                }
+            }
+
+            // -------------------------------------------------------------------
+            // EVENTO 2: LEITURA DO THUMBSTICK (Pincel)
+            // -------------------------------------------------------------------
+            else if (e->GetEventType() == RE::INPUT_EVENT_TYPE::kThumbstick && _isDrawingGesture && _activeGestureStick != -1) {
+                auto* stickEvent = static_cast<RE::ThumbstickEvent*>(e);
+                bool isLeft = stickEvent->IsLeft();
+
+                if ((_activeGestureStick == 0 && isLeft) || (_activeGestureStick == 1 && !isLeft)) {
+                    if (std::abs(stickEvent->xValue) > 0.15f || std::abs(stickEvent->yValue) > 0.15f) {
+
+                        std::lock_guard<std::mutex> lock(_gestureMutex);
+                        _virtualX += stickEvent->xValue * 8.0f;
+                        _virtualY -= stickEvent->yValue * 8.0f;
+
+                        if (!_activeGesturePath.empty()) {
+                            float dx = _virtualX - _activeGesturePath.back().x;
+                            float dy = _virtualY - _activeGesturePath.back().y;
+                            if (dx * dx + dy * dy > 4.0f) {
+                                _activeGesturePath.push_back({ _virtualX, _virtualY });
+                            }
+                        }
+                        else {
+                            _activeGesturePath.push_back({ _virtualX, _virtualY });
+                        }
+                    }
+                }
+            }
+
+            // -------------------------------------------------------------------
+            // EVENTO 3: LEITURA DOS BOTÕES E TECLADO
+            // -------------------------------------------------------------------
+            if (e->GetEventType() == RE::INPUT_EVENT_TYPE::kButton) {
+                auto* buttonEvent = static_cast<RE::ButtonEvent*>(e);
+                uint32_t id = GetUnifiedKeyCode(buttonEvent);
+                auto& state = _keyStates[id];
+                bool isBusy = _isRecordingMotion || (_testingMotionIndex >= 0);
+                if (isBusy) {
+                    if (buttonEvent->IsDown()) state.isDown = true;
+                    else if (buttonEvent->IsUp()) state.isDown = false;
+                    continue; // Ignora o processamento de macros/callbacks para este evento de botão
+                }
+                if (buttonEvent->IsDown()) {
+                    if (!state.isDown) {
+                        state.lastDownTime = now;
+                        state.isPressFired = false;
+                    }
+                    state.isDown = true;
+
+                    for (const auto& binding : _bindings) {
+                        if (binding.combo.modifierActionType == ActionState::kGesture && binding.combo.mainKey == id) {
+                            if (!_isDrawingGesture) {
+                                std::lock_guard<std::mutex> lock(_gestureMutex);
+                                _isDrawingGesture = true;
+                                _activeGestureBrushKey = id;
+                                _activeGestureStick = (buttonEvent->GetDevice() == RE::INPUT_DEVICE::kGamepad) ? binding.combo.gamepadGestureStick : -1;
+                                _activeGesturePath.clear();
+                                _virtualX = 0.0f;
+                                _virtualY = 0.0f;
+                                _activeGesturePath.push_back({ 0.0f, 0.0f });
+                            }
+                            break;
+                        }
+                    }
+                }
+                else if (buttonEvent->IsUp()) {
+                    if (state.isDown) {
+                        for (auto& binding : _bindings) {
+                            if (binding.activeHold) {
+                                bool mainReleased = (binding.combo.mainKey == id && (binding.combo.mainActionType == ActionState::kHold || binding.combo.mainActionType == ActionState::kPress));
+                                bool modReleased = (binding.combo.modifierKey == id && (binding.combo.modifierActionType == ActionState::kHold || binding.combo.modifierActionType == ActionState::kPress));
+
+                                if (mainReleased || modReleased) {
+                                    ExecuteReleaseCallback(binding.name);
+                                    binding.activeHold = false;
+                                }
+                            }
+                        }
+                        state.isDown = false;
+                        state.lastUpTime = now;
+                        state.isHeldFired = false;
+                        state.usedAsModifier = false;
+                        state.tapHistory.push_back(now);
+
+                        auto removeIt = std::remove_if(state.tapHistory.begin(), state.tapHistory.end(),
+                            [&](const auto& t) { return std::chrono::duration<float>(now - t).count() > 2.0f; });
+                        state.tapHistory.erase(removeIt, state.tapHistory.end());
+
+                        if (_isDrawingGesture && _activeGestureBrushKey == id) {
+
+                            std::vector<GestureMath::Point2D> pathToProcess;
+                            {
+                                std::lock_guard<std::mutex> lock(_gestureMutex);
+                                _isDrawingGesture = false;
+                                pathToProcess = _activeGesturePath;
+                                _activeGesturePath.clear();
+                            }
+
+                            if (pathToProcess.size() > 3) {
+                                auto candidate = GestureMath::NormalizeGesture(pathToProcess);
+
+                                for (const auto& binding : _bindings) {
+                                    if (binding.combo.modifierActionType == ActionState::kGesture && binding.combo.mainKey == id) {
+                                        if (binding.combo.gestureIndex >= 0 && binding.combo.gestureIndex < ActionMenuUI::movementList.size()) {
+
+                                            auto& targetGesture = ActionMenuUI::movementList[binding.combo.gestureIndex];
+                                            float score = GestureMath::GetMatchScore(targetGesture.normalizedPoints, candidate);
+
+                                            if (score >= targetGesture.requiredAccuracy) {
+                                                ExecuteCallback(binding.name);
+                                                consumed = true;
+                                                state.usedAsModifier = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // -------------------------------------------------------------------
+                // AVALIAÇÃO DINÂMICA DE TODAS AS AÇÕES REGISTADAS
+                // -------------------------------------------------------------------
+                for (auto& binding : _bindings) {
+
+                    if (binding.combo.modifierActionType == ActionState::kGesture) continue;
+
+                    if (binding.combo.mainKey == id || binding.combo.modifierKey == id) {
+
+                        bool mainIsAnchor = false;
+                        bool modIsAnchor = false;
+
+                        if (binding.combo.modifierKey != 0) {
+                            if (binding.combo.modifierActionType == ActionState::kTap) {
+                                mainIsAnchor = true;
+                                modIsAnchor = false;
+                            }
+                            else if (binding.combo.mainActionType == ActionState::kTap) {
+                                mainIsAnchor = false;
+                                modIsAnchor = true;
+                            }
+                            else {
+                                mainIsAnchor = false;
+                                modIsAnchor = true;
+                            }
+                        }
+
+                        if (IsConditionMet(binding.combo.mainKey, binding.combo.mainActionType, binding.combo.mainTapCount, now, binding.combo.tapWindow, binding.combo.holdDuration, mainIsAnchor) &&
+                            IsConditionMet(binding.combo.modifierKey, binding.combo.modifierActionType, binding.combo.modTapCount, now, binding.combo.tapWindow, binding.combo.holdDuration, modIsAnchor)) {
+
+                            bool isMainTap = (binding.combo.mainActionType == ActionState::kTap);
+                            bool isModTap = (binding.combo.modifierActionType == ActionState::kTap);
+
+                            if (binding.combo.mainActionType == ActionState::kHold) _keyStates[binding.combo.mainKey].isHeldFired = true;
+                            if (binding.combo.modifierActionType == ActionState::kHold) _keyStates[binding.combo.modifierKey].isHeldFired = true;
+                            if (binding.combo.mainActionType == ActionState::kPress) _keyStates[binding.combo.mainKey].isPressFired = true;
+                            if (binding.combo.modifierActionType == ActionState::kPress) _keyStates[binding.combo.modifierKey].isPressFired = true;
+
+                            _keyStates[binding.combo.mainKey].usedAsModifier = true;
+                            if (binding.combo.modifierKey != 0) _keyStates[binding.combo.modifierKey].usedAsModifier = true;
+
+                            consumed = true;
+
+                            if ((isMainTap || isModTap) && binding.combo.needsDelay) {
+
+                                std::string actionName = binding.name;
+                                uint32_t tapKey = isMainTap ? binding.combo.mainKey : binding.combo.modifierKey;
+                                int requiredTaps = isMainTap ? binding.combo.mainTapCount : binding.combo.modTapCount;
+                                float waitTime = binding.combo.tapWindow;
+
+                                std::thread([this, actionName, tapKey, requiredTaps, waitTime]() {
+                                    std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(waitTime * 1000)));
+
+                                    auto nowWake = std::chrono::steady_clock::now();
+                                    int validTaps = 0;
+
+                                    for (auto it = _keyStates[tapKey].tapHistory.rbegin(); it != _keyStates[tapKey].tapHistory.rend(); ++it) {
+                                        if (std::chrono::duration<float>(nowWake - *it).count() <= (waitTime * 1.5f)) {
+                                            validTaps++;
+                                        }
+                                        else {
+                                            break;
+                                        }
+                                    }
+
+                                    if (validTaps == requiredTaps && !_keyStates[tapKey].isDown) {
+                                        SKSE::GetTaskInterface()->AddTask([this, actionName, tapKey]() {
+                                            ExecuteCallback(actionName);
+
+                                            for (auto& b : _bindings) {
+                                                if (b.name == actionName) {
+                                                    bool needsRelease = (b.combo.mainActionType == ActionState::kHold || b.combo.modifierActionType == ActionState::kHold ||
+                                                        b.combo.mainActionType == ActionState::kPress || b.combo.modifierActionType == ActionState::kPress);
+                                                    if (needsRelease) {
+                                                        bool anchorIsDown = false;
+                                                        if (b.combo.mainActionType == ActionState::kHold || b.combo.mainActionType == ActionState::kPress) {
+                                                            anchorIsDown = _keyStates[b.combo.mainKey].isDown;
+                                                        }
+                                                        else {
+                                                            anchorIsDown = _keyStates[b.combo.modifierKey].isDown;
+                                                        }
+
+                                                        if (anchorIsDown) {
+                                                            b.activeHold = true;
+                                                        }
+                                                        else {
+                                                            ExecuteReleaseCallback(actionName);
+                                                        }
+                                                    }
+                                                    break;
+                                                }
+                                            }
+                                            _keyStates[tapKey].tapHistory.clear();
+                                            });
+                                    }
+                                    }).detach();
+                            }
+                            else {
+                                ExecuteCallback(binding.name);
+
+                                if (binding.combo.mainActionType == ActionState::kHold || binding.combo.modifierActionType == ActionState::kHold ||
+                                    binding.combo.mainActionType == ActionState::kPress || binding.combo.modifierActionType == ActionState::kPress) {
+                                    binding.activeHold = true;
+                                }
+
+                                if (binding.combo.mainActionType == ActionState::kTap) _keyStates[binding.combo.mainKey].tapHistory.clear();
+                                if (binding.combo.modifierActionType == ActionState::kTap) _keyStates[binding.combo.modifierKey].tapHistory.clear();
+                            }
+                        }
+                    }
+                }
+
+                if (buttonEvent->IsUp()) state.usedAsModifier = false;
+            }
+        }
+
+        return false;
+    }
+
+    bool KeyManager::ProcessInput(RE::InputEvent* a_event)
+    {
+        if (!a_event) return false;
+
+        // Verifica se está gravando/testando Motions ou executando Gestures
+        bool forceHook = _isRecordingMotion || (_testingMotionIndex >= 0);
+
+        // Se a UI diz para usar a Sink (useHook == false) E NÃO estamos gravando/testando,
+        // o Hook ignora o input e deixa passar (return false). A Sink vai pegar isso depois.
+        if (!ActionMenuUI::useHook && !forceHook) {
+            return false;
+        }
+
+        ProcessCoreLogic(a_event);
+
+        if (forceHook) return true;
+
+        return false;
+    }
+
+
     void KeyManager::ClearStates() {
         //logger::info("[KeyManager] Limpando todos os estados de teclas.");
         _keyStates.clear();
@@ -216,7 +634,6 @@ namespace PluginLogic {
                                 logger::info("[SUCCESS] {}", msg);
                                 RE::SendHUDMessage::ShowHUDMessage(msg.c_str());
                             }
-                           
                             InputManagerAPI::SendMotionTriggeredEvent(static_cast<int>(m), motionEntry.name);
                         }
 
@@ -230,388 +647,68 @@ namespace PluginLogic {
     }
 
 
-    void KeyManager::StartMotionTesting(int motionIndex) {
+    void KeyManager::StartMotionTesting(int motionIndex, bool isGamepad) {
         _testingMotionIndex = motionIndex;
+        _isRecordingGamepad = isGamepad;
         _motionTestSuccess = false;
         _inputHistory.clear();
         _recordingStartTime = std::chrono::steady_clock::now();
     }
 
-
-    bool KeyManager::ProcessInput(RE::InputEvent* a_event) {
-        if (!a_event) return false;
-        bool consumed = false;
-        auto now = std::chrono::steady_clock::now();
-
-        // --- ADIÇÃO: LIMPEZA DO BUFFER (Manter no máximo 4.0s globalmente) ---
-        while (!_inputHistory.empty() && std::chrono::duration<float>(now - _inputHistory.front().timestamp).count() > 4.0f) {
-            _inputHistory.pop_front();
+    void KeyManager::RegisterSink() {
+        if (auto inputManager = RE::BSInputDeviceManager::GetSingleton()) {
+            inputManager->AddEventSink(this);
+            logger::info("[KeyManager] Input sink registrado com sucesso nativamente.");
         }
-
-        // --- ADIÇÃO: TIMER DE GRAVAÇÃO (Para após 2s) ---
-        if (_isRecordingMotion && _recordingMotionIndex >= 0) {
-            float maxTime = ActionMenuUI::motionList[_recordingMotionIndex].timeWindow;
-            if (std::chrono::duration<float>(now - _recordingStartTime).count() > maxTime) {
-                _isRecordingMotion = false; // Acabou o tempo de gravação
-            }
-        }
-        if (_testingMotionIndex >= 0) {
-            float maxTime = ActionMenuUI::motionList[_testingMotionIndex].timeWindow;
-            if (std::chrono::duration<float>(now - _recordingStartTime).count() > maxTime) {
-                _testingMotionIndex = -1; // Acabou o tempo de teste (Falhou)
-            }
-        }
-
-        for (auto* e = a_event; e != nullptr; e = e->next) {
-
-            bool newUp = _dirUp, newDown = _dirDown, newLeft = _dirLeft, newRight = _dirRight;
-            bool dirChanged = false;
-            uint32_t rawKeyID = 0;
-            bool isGamepadEvent = (e->GetDevice() == RE::INPUT_DEVICE::kGamepad);
-            bool isKeyDown = false;
-
-            // 1. AVALIAÇÃO DE DIREÇÕES E BOTÕES BRUTOS
-            if (e->GetEventType() == RE::INPUT_EVENT_TYPE::kThumbstick) {
-                auto* stick = static_cast<RE::ThumbstickEvent*>(e);
-                if (stick->IsLeft()) {
-                    newUp = stick->yValue > 0.5f;
-                    newDown = stick->yValue < -0.5f;
-                    newLeft = stick->xValue < -0.5f;
-                    newRight = stick->xValue > 0.5f;
-                }
-            }
-            else if (e->GetEventType() == RE::INPUT_EVENT_TYPE::kButton) {
-                auto* btn = static_cast<RE::ButtonEvent*>(e);
-                rawKeyID = GetUnifiedKeyCode(btn);
-                isKeyDown = btn->IsDown();
-
-                // D-PAD Gamepad
-                if (rawKeyID == RE::BSWin32GamepadDevice::Keys::kUp + 266) newUp = btn->IsDown() || btn->IsHeld();
-                else if (rawKeyID == RE::BSWin32GamepadDevice::Keys::kDown + 266) newDown = btn->IsDown() || btn->IsHeld();
-                else if (rawKeyID == RE::BSWin32GamepadDevice::Keys::kLeft + 266) newLeft = btn->IsDown() || btn->IsHeld();
-                else if (rawKeyID == RE::BSWin32GamepadDevice::Keys::kRight + 266) newRight = btn->IsDown() || btn->IsHeld();
-                // WASD PC
-                else if (rawKeyID == DefaultkeyUp) newUp = btn->IsDown() || btn->IsHeld();
-                else if (rawKeyID == DefaultkeyDown) newDown = btn->IsDown() || btn->IsHeld();
-                else if (rawKeyID == DefaultkeyLeft) newLeft = btn->IsDown() || btn->IsHeld();
-                else if (rawKeyID == DefaultkeyRight) newRight = btn->IsDown() || btn->IsHeld();
-            }
-
-            // Verifica se a direção alterou
-            if (newUp != _dirUp || newDown != _dirDown || newLeft != _dirLeft || newRight != _dirRight) {
-                _dirUp = newUp; _dirDown = newDown; _dirLeft = newLeft; _dirRight = newRight;
-                dirChanged = true;
-            }
-
-            // --- ADIÇÃO: REGISTRO NO BUFFER ---
-            uint32_t eventToLog = 0;
-
-            if (dirChanged) {
-                eventToLog = GetDirectionVKey(_dirUp, _dirDown, _dirLeft, _dirRight);
-            }
-            else if (isKeyDown && rawKeyID != 0) {
-                // Não registra de novo as teclas direcionais brutas no buffer de motion, elas já viraram VKEY
-                if (rawKeyID != DefaultkeyUp && rawKeyID != DefaultkeyLeft &&
-                    rawKeyID != DefaultkeyDown && rawKeyID != DefaultkeyRight &&
-                    rawKeyID != (RE::BSWin32GamepadDevice::Keys::kUp + 266) && rawKeyID != (RE::BSWin32GamepadDevice::Keys::kDown + 266) &&
-                    rawKeyID != (RE::BSWin32GamepadDevice::Keys::kLeft + 266) && rawKeyID != (RE::BSWin32GamepadDevice::Keys::kRight + 266)) {
-
-                    eventToLog = rawKeyID;
-                }
-            }
-
-            if (eventToLog != 0) {
-                _inputHistory.push_back({ eventToLog, now });
-
-                if (_isRecordingMotion && (isGamepadEvent == _isRecordingGamepad)) {
-                    // Evita Spam da mesma tecla repetida consecutivamente
-                    if (_tempMotionSequence.empty() || _tempMotionSequence.back() != eventToLog) {
-                        _tempMotionSequence.push_back(eventToLog);
-                    }
-                }
-                else if (!_isRecordingMotion) {
-                    CheckMotionMatches(now);
-                }
-            }
-
-            // -------------------------------------------------------------------
-            // EVENTO 1: LEITURA DO RATO (Pincel)
-            // -------------------------------------------------------------------
-            if (e->GetEventType() == RE::INPUT_EVENT_TYPE::kMouseMove && _isDrawingGesture && _activeGestureStick == -1) {
-                auto* mouseEvent = static_cast<RE::MouseMoveEvent*>(e);
-
-                std::lock_guard<std::mutex> lock(_gestureMutex); // Protege a gravação dos pontos
-                _virtualX += mouseEvent->mouseInputX;
-                _virtualY += mouseEvent->mouseInputY;
-
-                if (!_activeGesturePath.empty()) {
-                    float dx = _virtualX - _activeGesturePath.back().x;
-                    float dy = _virtualY - _activeGesturePath.back().y;
-                    if (dx * dx + dy * dy > 4.0f) {
-                        _activeGesturePath.push_back({ _virtualX, _virtualY });
-                    }
-                }
-                else {
-                    _activeGesturePath.push_back({ _virtualX, _virtualY });
-                }
-            }
-
-            // -------------------------------------------------------------------
-            // EVENTO 2: LEITURA DO THUMBSTICK (Pincel)
-            // -------------------------------------------------------------------
-            else if (e->GetEventType() == RE::INPUT_EVENT_TYPE::kThumbstick && _isDrawingGesture && _activeGestureStick != -1) {
-                auto* stickEvent = static_cast<RE::ThumbstickEvent*>(e);
-                bool isLeft = stickEvent->IsLeft();
-
-                if ((_activeGestureStick == 0 && isLeft) || (_activeGestureStick == 1 && !isLeft)) {
-                    if (std::abs(stickEvent->xValue) > 0.15f || std::abs(stickEvent->yValue) > 0.15f) {
-
-                        std::lock_guard<std::mutex> lock(_gestureMutex); // Protege a gravação dos pontos
-                        _virtualX += stickEvent->xValue * 8.0f;
-                        _virtualY -= stickEvent->yValue * 8.0f;
-
-                        if (!_activeGesturePath.empty()) {
-                            float dx = _virtualX - _activeGesturePath.back().x;
-                            float dy = _virtualY - _activeGesturePath.back().y;
-                            if (dx * dx + dy * dy > 4.0f) {
-                                _activeGesturePath.push_back({ _virtualX, _virtualY });
-                            }
-                        }
-                        else {
-                            _activeGesturePath.push_back({ _virtualX, _virtualY });
-                        }
-                    }
-                }
-            }
-
-            // -------------------------------------------------------------------
-            // EVENTO 3: LEITURA DOS BOTÕES E TECLADO
-            // -------------------------------------------------------------------
-            if (e->GetEventType() == RE::INPUT_EVENT_TYPE::kButton) {
-                auto* buttonEvent = static_cast<RE::ButtonEvent*>(e);
-                uint32_t id = GetUnifiedKeyCode(buttonEvent);
-
-                auto& state = _keyStates[id];
-
-                if (buttonEvent->IsDown()) {
-                    if (!state.isDown) {
-                        state.lastDownTime = now;
-                        state.isPressFired = false;
-                    }
-                    state.isDown = true;
-
-                    for (const auto& binding : _bindings) {
-                        if (binding.combo.modifierActionType == ActionState::kGesture && binding.combo.mainKey == id) {
-                            if (!_isDrawingGesture) {
-                                std::lock_guard<std::mutex> lock(_gestureMutex);
-                                _isDrawingGesture = true;
-                                _activeGestureBrushKey = id;
-                                _activeGestureStick = (buttonEvent->GetDevice() == RE::INPUT_DEVICE::kGamepad) ? binding.combo.gamepadGestureStick : -1;
-                                _activeGesturePath.clear();
-                                _virtualX = 0.0f;
-                                _virtualY = 0.0f;
-                                _activeGesturePath.push_back({ 0.0f, 0.0f });
-                            }
-                            break;
-                        }
-                    }
-                }
-                else if (buttonEvent->IsUp()) {
-                    if (state.isDown) {
-                        for (auto& binding : _bindings) {
-                            if (binding.activeHold) {
-                                // Verifica se a tecla solta era a tecla principal do Hold ou a modificadora do Hold
-                                bool mainReleased = (binding.combo.mainKey == id && (binding.combo.mainActionType == ActionState::kHold || binding.combo.mainActionType == ActionState::kPress));
-                                bool modReleased = (binding.combo.modifierKey == id && (binding.combo.modifierActionType == ActionState::kHold || binding.combo.modifierActionType == ActionState::kPress));
-                                
-                                if (mainReleased || modReleased) {
-                                    ExecuteReleaseCallback(binding.name);
-                                    binding.activeHold = false; // Desliga a flag, o hold acabou
-                                }
-                            }
-                        }
-                        state.isDown = false;
-                        state.lastUpTime = now;
-                        state.isHeldFired = false;
-                        state.usedAsModifier = false;
-                        state.tapHistory.push_back(now);
-
-                        // Limpa lixo do histórico (Remove taps mais velhos que 2 segundos para não dar leak de memoria)
-                        auto removeIt = std::remove_if(state.tapHistory.begin(), state.tapHistory.end(),
-                            [&](const auto& t) { return std::chrono::duration<float>(now - t).count() > 2.0f; });
-                        state.tapHistory.erase(removeIt, state.tapHistory.end());
-
-                        if (_isDrawingGesture && _activeGestureBrushKey == id) {
-
-                            std::vector<GestureMath::Point2D> pathToProcess;
-                            {
-                                std::lock_guard<std::mutex> lock(_gestureMutex);
-                                _isDrawingGesture = false;
-                                pathToProcess = _activeGesturePath; 
-                                _activeGesturePath.clear();
-                            }
-
-                            if (pathToProcess.size() > 3) {
-                                auto candidate = GestureMath::NormalizeGesture(pathToProcess);
-
-                                for (const auto& binding : _bindings) {
-                                    if (binding.combo.modifierActionType == ActionState::kGesture && binding.combo.mainKey == id) {
-                                        if (binding.combo.gestureIndex >= 0 && binding.combo.gestureIndex < ActionMenuUI::movementList.size()) {
-
-                                            auto& targetGesture = ActionMenuUI::movementList[binding.combo.gestureIndex];
-                                            float score = GestureMath::GetMatchScore(targetGesture.normalizedPoints, candidate);
-
-                                            if (score >= targetGesture.requiredAccuracy) {
-                                                ExecuteCallback(binding.name);
-                                                consumed = true;
-                                                state.usedAsModifier = true;
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } 
-                }
-
-                // -------------------------------------------------------------------
-                // AVALIAÇÃO DINÂMICA DE TODAS AS AÇÕES REGISTADAS
-                // -------------------------------------------------------------------
-                for (auto& binding : _bindings) {
-
-                    if (binding.combo.modifierActionType == ActionState::kGesture) continue;
-
-                    if (binding.combo.mainKey == id || binding.combo.modifierKey == id) {
-
-                        // Define quem atua como Gatilho (Trava ativada) e quem atua como Âncora (Trava ignorada)
-                        bool mainIsAnchor = false;
-                        bool modIsAnchor = false;
-
-                        if (binding.combo.modifierKey != 0) {
-                            if (binding.combo.modifierActionType == ActionState::kTap) {
-                                // Se o Modificador é Tap, ele é o Gatilho. A Tecla Principal é a Âncora.
-                                mainIsAnchor = true;
-                                modIsAnchor = false;
-                            }
-                            else if (binding.combo.mainActionType == ActionState::kTap) {
-                                // Se a Tecla Principal é Tap, ela é o Gatilho. O Modificador é a Âncora.
-                                mainIsAnchor = false;
-                                modIsAnchor = true;
-                            }
-                            else {
-                                // Se nenhum for Tap (ex: Hold+Press), o Modificador atua como âncora tradicional.
-                                mainIsAnchor = false;
-                                modIsAnchor = true;
-                            }
-                        }
-
-                        // Verifica as condições bases de Tap, Hold, etc, respeitando as âncoras reais
-                        if (IsConditionMet(binding.combo.mainKey, binding.combo.mainActionType, binding.combo.mainTapCount, now, binding.combo.tapWindow, binding.combo.holdDuration, mainIsAnchor) &&
-                            IsConditionMet(binding.combo.modifierKey, binding.combo.modifierActionType, binding.combo.modTapCount, now, binding.combo.tapWindow, binding.combo.holdDuration, modIsAnchor)) {
-                            // LÓGICA DE DELAY PARA TAP CONFLITANTE
-                            bool isMainTap = (binding.combo.mainActionType == ActionState::kTap);
-                            bool isModTap = (binding.combo.modifierActionType == ActionState::kTap);
-
-                            // 1. Trava os disparos repetidos instantaneamente para o frame atual não reavaliar
-                            if (binding.combo.mainActionType == ActionState::kHold) _keyStates[binding.combo.mainKey].isHeldFired = true;
-                            if (binding.combo.modifierActionType == ActionState::kHold) _keyStates[binding.combo.modifierKey].isHeldFired = true;
-                            if (binding.combo.mainActionType == ActionState::kPress) _keyStates[binding.combo.mainKey].isPressFired = true;
-                            if (binding.combo.modifierActionType == ActionState::kPress) _keyStates[binding.combo.modifierKey].isPressFired = true;
-
-                            _keyStates[binding.combo.mainKey].usedAsModifier = true;
-                            if (binding.combo.modifierKey != 0) _keyStates[binding.combo.modifierKey].usedAsModifier = true;
-
-                            consumed = true;
-
-                            if ((isMainTap || isModTap) && binding.combo.needsDelay) {
-
-                                std::string actionName = binding.name;
-                                uint32_t tapKey = isMainTap ? binding.combo.mainKey : binding.combo.modifierKey;
-                                int requiredTaps = isMainTap ? binding.combo.mainTapCount : binding.combo.modTapCount;
-                                float waitTime = binding.combo.tapWindow;
-
-                                std::thread([this, actionName, tapKey, requiredTaps, waitTime]() {
-                                    std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(waitTime * 1000)));
-
-                                    auto nowWake = std::chrono::steady_clock::now();
-                                    int validTaps = 0;
-
-                                    for (auto it = _keyStates[tapKey].tapHistory.rbegin(); it != _keyStates[tapKey].tapHistory.rend(); ++it) {
-                                        if (std::chrono::duration<float>(nowWake - *it).count() <= (waitTime * 1.5f)) {
-                                            validTaps++;
-                                        }
-                                        else {
-                                            break;
-                                        }
-                                    }
-
-                                    // Dispara APENAS se os Taps exatos baterem. 
-                                    if (validTaps == requiredTaps && !_keyStates[tapKey].isDown) {
-                                        SKSE::GetTaskInterface()->AddTask([this, actionName, tapKey]() {
-                                            ExecuteCallback(actionName);
-
-                                            //Liga o ActionReleased SOMENTE se a ação realmente disparou no delay
-                                            for (auto& b : _bindings) {
-                                                if (b.name == actionName) {
-                                                    bool needsRelease = (b.combo.mainActionType == ActionState::kHold || b.combo.modifierActionType == ActionState::kHold ||
-                                                        b.combo.mainActionType == ActionState::kPress || b.combo.modifierActionType == ActionState::kPress);
-                                                    if (needsRelease) {
-                                                        // Verifica se a tecla âncora (Hold/Press) ainda está sendo segurada
-                                                        bool anchorIsDown = false;
-                                                        if (b.combo.mainActionType == ActionState::kHold || b.combo.mainActionType == ActionState::kPress) {
-                                                            anchorIsDown = _keyStates[b.combo.mainKey].isDown;
-                                                        }
-                                                        else {
-                                                            anchorIsDown = _keyStates[b.combo.modifierKey].isDown;
-                                                        }
-
-                                                        if (anchorIsDown) {
-                                                            b.activeHold = true; // Ainda segura, aguarda o botão subir
-                                                        }
-                                                        else {
-                                                            ExecuteReleaseCallback(actionName); // Já soltou durante a espera do delay, libera agora
-                                                        }
-                                                    }
-                                                    break;
-                                                }
-                                            }
-                                            // Limpa para não disparar múltiplas vezes em sequências rápidas
-                                            _keyStates[tapKey].tapHistory.clear();
-                                            });
-                                    }
-                                    }).detach();
-                            }
-                            else {
-                                // Se for Tap sem conflitos, Hold, ou Press, DISPARA INSTANTANEAMENTE
-                                ExecuteCallback(binding.name);
-
-                                if (binding.combo.mainActionType == ActionState::kHold || binding.combo.modifierActionType == ActionState::kHold ||
-                                    binding.combo.mainActionType == ActionState::kPress || binding.combo.modifierActionType == ActionState::kPress) {
-                                    binding.activeHold = true;
-                                }
-
-                                if (binding.combo.mainActionType == ActionState::kTap) _keyStates[binding.combo.mainKey].tapHistory.clear();
-                                if (binding.combo.modifierActionType == ActionState::kTap) _keyStates[binding.combo.modifierKey].tapHistory.clear();
-                            }
-                        }
-                    }
-                }
-
-                if (buttonEvent->IsUp()) state.usedAsModifier = false;
-            }
-        }
-        return consumed;
     }
-    void GetMovementKeys()
-    {
-        auto controlMap = RE::ControlMap::GetSingleton();
-        auto userEvents = RE::UserEvents::GetSingleton();
-        if (controlMap && userEvents) {
-            DefaultkeyUp = controlMap->GetMappedKey(userEvents->forward, RE::INPUT_DEVICE::kKeyboard);
-            DefaultkeyDown = controlMap->GetMappedKey(userEvents->back, RE::INPUT_DEVICE::kKeyboard);
-            DefaultkeyLeft = controlMap->GetMappedKey(userEvents->strafeLeft, RE::INPUT_DEVICE::kKeyboard);
-            DefaultkeyRight = controlMap->GetMappedKey(userEvents->strafeRight, RE::INPUT_DEVICE::kKeyboard);
+
+    RE::BSEventNotifyControl KeyManager::ProcessEvent(RE::InputEvent* const* a_event, RE::BSTEventSource<RE::InputEvent*>* a_source) {
+        if (!a_event || !*a_event) {
+            return RE::BSEventNotifyControl::kContinue;
         }
+
+        bool forceHook = _isRecordingMotion || (_testingMotionIndex >= 0);
+
+        // Regra 1 e 2 invertidas: Se o Hook estiver ativo (useHook == true) OU se estivermos
+        // forçando o uso do Hook (gravação/teste), a SINK DEVE IGNORAR o evento para não processar duplicado.
+        if (ActionMenuUI::useHook || forceHook) {
+            return RE::BSEventNotifyControl::kContinue;
+        }
+
+        // Processa usando a Sink normalmente (*a_event pega o ponteiro base da lista)
+        ProcessCoreLogic(*a_event);
+
+        return RE::BSEventNotifyControl::kContinue;
+    }
+
+    void KeyManager::ResetAllInputs() {
+        // 1. Dispara o Release Callback para todas as ações que ficaram ativas (Hold/Press)
+        for (auto& binding : _bindings) {
+            if (binding.activeHold) {
+                ExecuteReleaseCallback(binding.name);
+                binding.activeHold = false;
+            }
+        }
+
+        // 2. Reseta o estado de todas as teclas físicas conhecidas
+        for (auto& pair : _keyStates) {
+            pair.second.isDown = false;
+            pair.second.isPressFired = false;
+            pair.second.isHeldFired = false;
+            pair.second.usedAsModifier = false;
+            pair.second.tapHistory.clear();
+        }
+
+        // 3. Cancela qualquer Gesture (Pincel) em andamento
+        {
+            std::lock_guard<std::mutex> lock(_gestureMutex);
+            _isDrawingGesture = false;
+            _activeGesturePath.clear();
+        }
+
+        // 4. Limpa os buffers de Motion e Direcionais
+        _inputHistory.clear();
+        _tempMotionSequence.clear();
+        _dirUp = false; _dirDown = false; _dirLeft = false; _dirRight = false;
     }
 }

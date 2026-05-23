@@ -4,6 +4,7 @@
 #include "InputManager.h"
 #include "InputEventHandler.h"
 #include "OverlayRenderer.h"
+#include "Hooks.h"
 
 extern "C" __declspec(dllexport) void* GetInputManagerAPI() {
     return InputManagerAPI::InputManagerAPI_Impl::GetSingleton();
@@ -91,11 +92,11 @@ namespace InputManagerAPI {
                 if (aModAct == 0 || aModAct == 3) aModKey = 0;
                 if (bModAct == 0 || bModAct == 3) bModKey = 0;
 
-                // Normaliza Press (4) para Hold (2) para avaliar conflitos justos
-                int normAMAct = (aMAct == 4) ? 2 : aMAct;
-                int normBMAct = (bMAct == 4) ? 2 : bMAct;
-                int normAModAct = (aModAct == 4) ? 2 : aModAct;
-                int normBModAct = (bModAct == 4) ? 2 : bModAct;
+                // AJUSTE: Normaliza Press (4) para Hold (2) para avaliar conflitos apenas se o modo avançado NÃO estiver ativo
+                int normAMAct = (!ActionMenuUI::advancedMode && aMAct == 4) ? 2 : aMAct;
+                int normBMAct = (!ActionMenuUI::advancedMode && bMAct == 4) ? 2 : bMAct;
+                int normAModAct = (!ActionMenuUI::advancedMode && aModAct == 4) ? 2 : aModAct;
+                int normBModAct = (!ActionMenuUI::advancedMode && bModAct == 4) ? 2 : bModAct;
 
                 // Se houver gestos, tratamos isoladamente
                 if (aModAct == 3 || bModAct == 3) {
@@ -150,7 +151,7 @@ namespace InputManagerAPI {
                 newPcModKey, newMapping.pcModAction, newMapping.pcModTapCount, newPcGestIndex,
                 b.pcMainKey, b.pcMainAction, b.pcMainTapCount,
                 b.pcModifierKey, b.pcModAction, b.pcModTapCount, b.gestureIndex)) {
-                return false; 
+                return false;
             }
 
             // Check Gamepad configuration
@@ -159,7 +160,7 @@ namespace InputManagerAPI {
                 newPadModKey, newMapping.gamepadModAction, newMapping.gamepadModTapCount, newPadGestIndex,
                 b.gamepadMainKey, b.gamepadMainAction, b.gamepadMainTapCount,
                 b.gamepadModifierKey, b.gamepadModAction, b.gamepadModTapCount, b.gestureIndex)) {
-                return false; 
+                return false;
             }
         }
 
@@ -599,7 +600,9 @@ void OnMessage(SKSE::MessagingInterface::Message* message) {
         ProcessInputQueueHook::install();
         InputEventHandler::Register(OnManagerInputReceived);
         OverlayRenderer::GetSingleton()->Install();
-        PluginLogic::GetMovementKeys();
+        PluginLogic::KeyManager::GetSingleton()->RegisterSink();
+        //PluginLogic::GetMovementKeys();
+        InstallWindowFocusHook();
     }
     else if (message->type == InputManagerAPI::kMessage_RequestAPI) {
         auto api = InputManagerAPI::InputManagerAPI_Impl::GetSingleton();
