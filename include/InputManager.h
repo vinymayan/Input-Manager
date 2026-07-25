@@ -63,6 +63,19 @@ namespace InputManagerAPI {
         }
     }
 
+    inline void SendMotionInputUpdatedEvent(uint32_t lastInput, const std::string& payload) {
+        auto dispatcher = SKSE::GetModCallbackEventSource();
+        if (dispatcher) {
+            SKSE::ModCallbackEvent modEvent{
+                RE::BSFixedString("InputManager_MotionInputUpdated"),
+                RE::BSFixedString(payload),
+                static_cast<float>(lastInput),
+                nullptr
+            };
+            dispatcher->SendEvent(&modEvent);
+        }
+    }
+
     // Apenas declaração para o Papyrus
     bool RegisterPapyrusFunctions(RE::BSScript::IVirtualMachine* vm);
 }

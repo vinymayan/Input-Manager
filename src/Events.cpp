@@ -55,6 +55,7 @@ namespace PluginLogic {
             else if (e->GetEventType() == RE::INPUT_EVENT_TYPE::kButton) {
                 auto* btn = static_cast<RE::ButtonEvent*>(e);
                 rawKeyID = GetUnifiedKeyCode(btn);
+                const uint32_t originalRawKeyID = rawKeyID;
                 isKeyDown = btn->IsDown();
 
                 if ((_isRecordingMotion || _testingMotionIndex >= 0) && _isRecordingGamepad) {
@@ -84,8 +85,14 @@ namespace PluginLogic {
                     }
                 }
                 // Movimento via User Events
+                const bool usesMotionPCMapping =
+                    (originalRawKeyID == ActionMenuUI::motionPC_Up && ActionMenuUI::motionPC_Up != 0) ||
+                    (originalRawKeyID == ActionMenuUI::motionPC_Down && ActionMenuUI::motionPC_Down != 0) ||
+                    (originalRawKeyID == ActionMenuUI::motionPC_Left && ActionMenuUI::motionPC_Left != 0) ||
+                    (originalRawKeyID == ActionMenuUI::motionPC_Right && ActionMenuUI::motionPC_Right != 0);
+
                 auto userEvent = btn->GetUserEvent();
-                if (userEvent != "") {
+                if (!usesMotionPCMapping && userEvent != "") {
                     bool isPressed = btn->IsPressed();
                     if (userEvent == "Forward" || userEvent == "Up") newUp = isPressed;
                     else if (userEvent == "Back" || userEvent == "Down") newDown = isPressed;
@@ -93,10 +100,10 @@ namespace PluginLogic {
                     else if (userEvent == "Strafe Right" || userEvent == "Right") newRight = isPressed;
                 }
 
-                if (rawKeyID == ActionMenuUI::motionPC_Up && ActionMenuUI::motionPC_Up != 0) newUp = btn->IsDown() || btn->IsHeld();
-                else if (rawKeyID == ActionMenuUI::motionPC_Down && ActionMenuUI::motionPC_Down != 0) newDown = btn->IsDown() || btn->IsHeld();
-                else if (rawKeyID == ActionMenuUI::motionPC_Left && ActionMenuUI::motionPC_Left != 0) newLeft = btn->IsDown() || btn->IsHeld();
-                else if (rawKeyID == ActionMenuUI::motionPC_Right && ActionMenuUI::motionPC_Right != 0) newRight = btn->IsDown() || btn->IsHeld();
+                if (originalRawKeyID == ActionMenuUI::motionPC_Up && ActionMenuUI::motionPC_Up != 0) newUp = btn->IsDown() || btn->IsHeld();
+                else if (originalRawKeyID == ActionMenuUI::motionPC_Down && ActionMenuUI::motionPC_Down != 0) newDown = btn->IsDown() || btn->IsHeld();
+                else if (originalRawKeyID == ActionMenuUI::motionPC_Left && ActionMenuUI::motionPC_Left != 0) newLeft = btn->IsDown() || btn->IsHeld();
+                else if (originalRawKeyID == ActionMenuUI::motionPC_Right && ActionMenuUI::motionPC_Right != 0) newRight = btn->IsDown() || btn->IsHeld();
                 // D-PAD Gamepad
                 if (rawKeyID == RE::BSWin32GamepadDevice::Keys::kUp + 266) newUp = btn->IsDown() || btn->IsHeld();
                 else if (rawKeyID == RE::BSWin32GamepadDevice::Keys::kDown + 266) newDown = btn->IsDown() || btn->IsHeld();
@@ -133,7 +140,24 @@ namespace PluginLogic {
             }
 
             if (eventToLog != 0) {
+                if (_testingMotionIndex >= 0 && (isGamepadEvent == _isRecordingGamepad)) {
+                    if (_tempMotionTestSequence.size() < 20) {
+                        _tempMotionTestSequence.push_back(eventToLog);
+                    }
+                }
+
                 _inputHistory.push_back({ eventToLog, now });
+                TrimMotionHistory(isGamepadEvent);
+
+                std::string partialPayload = isGamepadEvent ? "pad|" : "pc|";
+                const std::size_t startIndex = _inputHistory.size() > 12 ? _inputHistory.size() - 12 : 0;
+                for (std::size_t i = startIndex; i < _inputHistory.size(); ++i) {
+                    if (i != startIndex) {
+                        partialPayload += ",";
+                    }
+                    partialPayload += std::to_string(_inputHistory[i].keyID);
+                }
+                InputManagerAPI::SendMotionInputUpdatedEvent(eventToLog, partialPayload);
 
                 if (_isRecordingMotion && (isGamepadEvent == _isRecordingGamepad)) {
                     if (_tempMotionSequence.empty() || _tempMotionSequence.back() != eventToLog) {
@@ -593,6 +617,60 @@ namespace PluginLogic {
 
 
 
+    bool KeyManager::IsMotionPrefix(const std::vector<uint32_t>& candidate, bool isGamepad) const {
+        if (candidate.empty()) return false;
+
+        for (const auto& motionEntry : ActionMenuUI::motionList) {
+            const auto& requiredSeq = isGamepad ? motionEntry.padSequence : motionEntry.pcSequence;
+            if (requiredSeq.empty() || candidate.size() > requiredSeq.size()) {
+                continue;
+            }
+
+            bool matches = true;
+            for (std::size_t i = 0; i < candidate.size(); ++i) {
+                if (candidate[i] != requiredSeq[i]) {
+                    matches = false;
+                    break;
+                }
+            }
+
+            if (matches) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    void KeyManager::TrimMotionHistory(bool isGamepad) {
+        if (_inputHistory.empty()) return;
+
+        std::size_t bestStart = _inputHistory.size();
+        for (std::size_t start = 0; start < _inputHistory.size(); ++start) {
+            std::vector<uint32_t> candidate;
+            candidate.reserve(_inputHistory.size() - start);
+            for (std::size_t i = start; i < _inputHistory.size(); ++i) {
+                candidate.push_back(_inputHistory[i].keyID);
+            }
+
+            if (IsMotionPrefix(candidate, isGamepad)) {
+                bestStart = start;
+                break;
+            }
+        }
+
+        if (bestStart == 0) {
+            return;
+        }
+
+        if (bestStart >= _inputHistory.size()) {
+            _inputHistory.clear();
+            return;
+        }
+
+        _inputHistory.erase(_inputHistory.begin(), _inputHistory.begin() + static_cast<std::ptrdiff_t>(bestStart));
+    }
+
     void KeyManager::CheckMotionMatches(std::chrono::steady_clock::time_point now) {
         if (_inputHistory.empty()) return;
 
@@ -600,47 +678,48 @@ namespace PluginLogic {
             const auto& motionEntry = ActionMenuUI::motionList[m];
 
             for (int pass = 0; pass < 2; ++pass) {
+                if (_testingMotionIndex >= 0 && ((pass == 1) != _isRecordingGamepad)) {
+                    continue;
+                }
+
                 const auto& requiredSeq = (pass == 0) ? motionEntry.pcSequence : motionEntry.padSequence;
 
                 if (requiredSeq.empty()) continue;
-                if (_inputHistory.back().keyID != requiredSeq.back()) continue;
+                if (_inputHistory.size() < requiredSeq.size()) continue;
 
-                int reqIdx = static_cast<int>(requiredSeq.size()) - 1;
-                int firstMatchHistoryIdx = -1;
-
-                // Busca a sequência de trás pra frente
-                for (int i = static_cast<int>(_inputHistory.size()) - 1; i >= 0 && reqIdx >= 0; --i) {
-                    if (_inputHistory[i].keyID == requiredSeq[reqIdx]) {
-                        if (reqIdx == 0) firstMatchHistoryIdx = i; // Encontrou o primeiro input da sequência!
-                        reqIdx--;
+                const auto startIdx = _inputHistory.size() - requiredSeq.size();
+                bool matches = true;
+                for (std::size_t i = 0; i < requiredSeq.size(); ++i) {
+                    if (_inputHistory[startIdx + i].keyID != requiredSeq[i]) {
+                        matches = false;
+                        break;
                     }
                 }
+                if (!matches) continue;
 
-                if (reqIdx < 0 && firstMatchHistoryIdx != -1) {
-                    // Calcula o tempo levado entre o PRIMEIRO e o ÚLTIMO botão da sequência
-                    float timeTaken = std::chrono::duration<float>(_inputHistory.back().timestamp - _inputHistory[firstMatchHistoryIdx].timestamp).count();
+                // Calcula o tempo levado entre o PRIMEIRO e o ÚLTIMO botão da sequência
+                float timeTaken = std::chrono::duration<float>(_inputHistory.back().timestamp - _inputHistory[startIdx].timestamp).count();
 
-                    // Verifica se o jogador executou dentro da janela permitida
-                    if (timeTaken <= motionEntry.timeWindow) {
+                // Verifica se o jogador executou dentro da janela permitida
+                if (timeTaken <= motionEntry.timeWindow) {
 
-                        if (_testingMotionIndex == static_cast<int>(m)) {
-                            // Sucesso no Teste!
-                            _motionTestSuccess = true;
-                            _testingMotionIndex = -1;
-                        }
-                        else if (_testingMotionIndex == -1 && !_isRecordingMotion) {
-                            if (ActionMenuUI::showDebugLogs) { 
-                                std::string msg = "Motion triggered: " + std::string(motionEntry.name);
-                                logger::info("[SUCCESS] {}", msg);
-                                RE::SendHUDMessage::ShowHUDMessage(msg.c_str());
-                            }
-                            InputManagerAPI::SendMotionTriggeredEvent(static_cast<int>(m), motionEntry.name);
-                        }
-
-                        // Limpa o histórico em todos os casos de sucesso
-                        _inputHistory.clear();
-                        return;
+                    if (_testingMotionIndex == static_cast<int>(m)) {
+                        // Sucesso no Teste!
+                        _motionTestSuccess = true;
+                        _testingMotionIndex = -1;
                     }
+                    else if (_testingMotionIndex == -1 && !_isRecordingMotion) {
+                        if (ActionMenuUI::showDebugLogs) {
+                            std::string msg = "Motion triggered: " + std::string(motionEntry.name);
+                            logger::info("[SUCCESS] {}", msg);
+                            RE::SendHUDMessage::ShowHUDMessage(msg.c_str());
+                        }
+                        InputManagerAPI::SendMotionTriggeredEvent(static_cast<int>(m), motionEntry.name);
+                    }
+
+                    // Limpa o histórico em todos os casos de sucesso
+                    _inputHistory.clear();
+                    return;
                 }
             }
         }
@@ -651,6 +730,7 @@ namespace PluginLogic {
         _testingMotionIndex = motionIndex;
         _isRecordingGamepad = isGamepad;
         _motionTestSuccess = false;
+        _tempMotionTestSequence.clear();
         _inputHistory.clear();
         _recordingStartTime = std::chrono::steady_clock::now();
     }

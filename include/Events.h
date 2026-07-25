@@ -102,7 +102,8 @@ namespace PluginLogic {
 
         void StartMotionTesting(int motionIndex, bool isGamepad);
         bool GetMotionTestSuccess() const { return _motionTestSuccess; }
-        void ResetMotionTest() { _motionTestSuccess = false; _testingMotionIndex = -1; }
+        std::vector<uint32_t> GetMotionTestInputs() const { return _tempMotionTestSequence; }
+        void ResetMotionTest() { _motionTestSuccess = false; _testingMotionIndex = -1; _tempMotionTestSequence.clear(); }
         bool IsTestingMotion() const { return _testingMotionIndex != -1; }
 
     private:
@@ -118,6 +119,8 @@ namespace PluginLogic {
         void ExecuteCallback(const std::string& name);
         void ExecuteReleaseCallback(const std::string& name);
         uint32_t GetDirectionVKey(bool u, bool d, bool l, bool r);
+        bool IsMotionPrefix(const std::vector<uint32_t>& candidate, bool isGamepad) const;
+        void TrimMotionHistory(bool isGamepad);
         void CheckMotionMatches(std::chrono::steady_clock::time_point now);
 
         std::deque<InputHistoryRecord> _inputHistory;
@@ -132,6 +135,7 @@ namespace PluginLogic {
         // --- ADIÇÃO: VARIÁVEIS DE TESTE ---
         int _testingMotionIndex = -1;
         bool _motionTestSuccess = false;
+        std::vector<uint32_t> _tempMotionTestSequence;
 
         std::unordered_map<uint32_t, KeyState> _keyStates;
         std::vector<KeyBinding> _bindings;

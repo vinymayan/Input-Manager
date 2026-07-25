@@ -27,7 +27,7 @@ namespace ActionMenuUI {
     // =========================================================================
     // FOLDER STRUCTURE
     // =========================================================================
-    const std::string BASE_DIR = "Data/SKSE/Plugins/Input Manager/";
+    const std::string BASE_DIR = "Data/Viny Mods/Input Manager/";
     const std::string SETTINGS_PATH = BASE_DIR + "Settings.json";
     const std::string INPUTS_DIR = BASE_DIR + "Inputs/";
     const std::string GESTURES_DIR = BASE_DIR + "Gestures/";
@@ -35,11 +35,116 @@ namespace ActionMenuUI {
     const std::string CACHE_PATH = BASE_DIR + "IDCache.json";
     const std::string LANG_PATH = BASE_DIR + "Language.json";
 
+    const std::string LEGACY_BASE_DIR = "Data/SKSE/Plugins/Input Manager/";
+    const std::string LEGACY_SETTINGS_PATH = LEGACY_BASE_DIR + "Settings.json";
+    const std::string LEGACY_INPUTS_DIR = LEGACY_BASE_DIR + "Inputs/";
+    const std::string LEGACY_GESTURES_DIR = LEGACY_BASE_DIR + "Gestures/";
+    const std::string LEGACY_MOTIONS_DIR = LEGACY_BASE_DIR + "Motion Inputs/";
+    const std::string LEGACY_CACHE_PATH = LEGACY_BASE_DIR + "IDCache.json";
+    const std::string LEGACY_LANG_PATH = LEGACY_BASE_DIR + "Language.json";
+
+    inline void CopyLegacyFileIfMissing(const fs::path& targetPath, const fs::path& legacyPath) {
+        try {
+            if (!fs::exists(targetPath) && fs::exists(legacyPath)) {
+                fs::create_directories(targetPath.parent_path());
+                std::error_code ec;
+                fs::copy_file(legacyPath, targetPath, fs::copy_options::skip_existing, ec);
+                if (ec) {
+                    logger::warn("[Input Manager] Could not migrate legacy file {}: {}",
+                        legacyPath.string(), ec.message());
+                }
+            }
+        }
+        catch (...) {}
+    }
+
+    inline void CopyLegacyDirectoryFilesIfMissing(const fs::path& targetDir, const fs::path& legacyDir) {
+        try {
+            if (!fs::exists(legacyDir)) {
+                return;
+            }
+
+            fs::create_directories(targetDir);
+            for (const auto& entry : fs::recursive_directory_iterator(legacyDir)) {
+                if (!entry.is_regular_file()) {
+                    continue;
+                }
+
+                std::error_code relEc;
+                const auto relativePath = fs::relative(entry.path(), legacyDir, relEc);
+                if (relEc) {
+                    continue;
+                }
+
+                const auto targetPath = targetDir / relativePath;
+                if (fs::exists(targetPath)) {
+                    continue;
+                }
+
+                fs::create_directories(targetPath.parent_path());
+                std::error_code copyEc;
+                fs::copy_file(entry.path(), targetPath, fs::copy_options::skip_existing, copyEc);
+                if (copyEc) {
+                    logger::warn("[Input Manager] Could not migrate legacy file {}: {}",
+                        entry.path().string(), copyEc.message());
+                }
+            }
+        }
+        catch (...) {}
+    }
+
+    inline fs::path ResolveLoadFilePath(const fs::path& targetPath, const fs::path& legacyPath) {
+        if (fs::exists(targetPath)) {
+            return targetPath;
+        }
+        if (fs::exists(legacyPath)) {
+            return legacyPath;
+        }
+        return targetPath;
+    }
+
+    inline bool DirectoryHasJsonFiles(const fs::path& dir) {
+        try {
+            if (!fs::exists(dir)) {
+                return false;
+            }
+
+            for (const auto& entry : fs::directory_iterator(dir)) {
+                if (entry.is_regular_file() && entry.path().extension() == ".json") {
+                    return true;
+                }
+            }
+        }
+        catch (...) {}
+        return false;
+    }
+
+    inline fs::path ResolveLoadDirectory(const fs::path& targetDir, const fs::path& legacyDir) {
+        if (DirectoryHasJsonFiles(targetDir)) {
+            return targetDir;
+        }
+        if (DirectoryHasJsonFiles(legacyDir)) {
+            return legacyDir;
+        }
+        return targetDir;
+    }
+
+    inline void MigrateLegacySettings() {
+        CopyLegacyFileIfMissing(SETTINGS_PATH, LEGACY_SETTINGS_PATH);
+        CopyLegacyFileIfMissing(CACHE_PATH, LEGACY_CACHE_PATH);
+        CopyLegacyFileIfMissing(LANG_PATH, LEGACY_LANG_PATH);
+        CopyLegacyDirectoryFilesIfMissing(INPUTS_DIR, LEGACY_INPUTS_DIR);
+        CopyLegacyDirectoryFilesIfMissing(GESTURES_DIR, LEGACY_GESTURES_DIR);
+        CopyLegacyDirectoryFilesIfMissing(MOTIONS_DIR, LEGACY_MOTIONS_DIR);
+    }
+
     inline std::unordered_map<std::string, std::string> LangMap;
 
     inline void LoadLanguage() {
         LangMap.clear();
-        std::ifstream file(LANG_PATH, std::ios::binary);
+        CopyLegacyFileIfMissing(LANG_PATH, LEGACY_LANG_PATH);
+        const auto langPath = ResolveLoadFilePath(LANG_PATH, LEGACY_LANG_PATH);
+        std::ifstream file(langPath, std::ios::binary);
         if (!file.is_open()) {
             logger::warn("[Input Manager] Language.json not found. Using default texts.");
             return;
@@ -364,9 +469,11 @@ namespace ActionMenuUI {
     inline std::vector<std::string> loadedGestureFiles;
 
     inline void LoadSettingsFromJson() {
-        std::string targetPath = SETTINGS_PATH;
+        CopyLegacyFileIfMissing(SETTINGS_PATH, LEGACY_SETTINGS_PATH);
+        const auto targetPath = ResolveLoadFilePath(SETTINGS_PATH, LEGACY_SETTINGS_PATH);
         try {
             std::ifstream ifs(targetPath);
+            if (!ifs.is_open()) return;
             rapidjson::IStreamWrapper isw(ifs);
             rapidjson::Document doc;
             doc.ParseStream(isw);
@@ -447,8 +554,10 @@ namespace ActionMenuUI {
 
     inline void LoadCacheFromJson() {
         actionCache.clear(); gestureCache.clear(); motionCache.clear();
+        CopyLegacyFileIfMissing(CACHE_PATH, LEGACY_CACHE_PATH);
         try {
-            std::ifstream ifs(CACHE_PATH);
+            const auto cachePath = ResolveLoadFilePath(CACHE_PATH, LEGACY_CACHE_PATH);
+            std::ifstream ifs(cachePath);
             if (!ifs.is_open()) return;
             rapidjson::IStreamWrapper isw(ifs);
             rapidjson::Document doc;
@@ -506,7 +615,9 @@ namespace ActionMenuUI {
     inline void LoadActionsFromJson() {
         actionList.clear();
         loadedInputFiles.clear();
+        CopyLegacyDirectoryFilesIfMissing(INPUTS_DIR, LEGACY_INPUTS_DIR);
         fs::create_directories(INPUTS_DIR);
+        const auto inputDir = ResolveLoadDirectory(INPUTS_DIR, LEGACY_INPUTS_DIR);
         std::vector<std::pair<int, ActionEntry>> tempLoaded;
 
         auto parseActionItem = [&](const rapidjson::Value& item) {
@@ -548,7 +659,7 @@ namespace ActionMenuUI {
             tempLoaded.push_back({ order, entry });
             };
 
-        for (const auto& entry : fs::directory_iterator(INPUTS_DIR)) {
+        for (const auto& entry : fs::directory_iterator(inputDir)) {
             if (entry.path().extension() == ".json") {
                 loadedInputFiles.push_back(entry.path().filename().string());
                 std::ifstream ifs(entry.path());
@@ -571,7 +682,12 @@ namespace ActionMenuUI {
 
     inline void SaveActionsToJson() {
         try {
-            fs::create_directories(INPUTS_DIR);
+            std::error_code ec;
+            fs::create_directories(INPUTS_DIR, ec);
+            if (ec) {
+                logger::error("[Input Manager] Error creating Inputs directory: {}", ec.message());
+                return;
+            }
             std::vector<std::string> uniqueFiles;
             for (const auto& action : actionList) {
                 std::string file = SanitizeFileName(action.name);
@@ -647,10 +763,16 @@ namespace ActionMenuUI {
     inline void LoadGesturesFromJson() {
         movementList.clear();
         loadedGestureFiles.clear();
-        fs::create_directories(GESTURES_DIR);
+        std::error_code ec;
+        CopyLegacyDirectoryFilesIfMissing(GESTURES_DIR, LEGACY_GESTURES_DIR);
+        fs::create_directories(GESTURES_DIR, ec);
+        if (ec) {
+            logger::error("[Input Manager] Error creating Gestures directory: {}", ec.message());
+        }
+        const auto gesturesDir = ResolveLoadDirectory(GESTURES_DIR, LEGACY_GESTURES_DIR);
         std::vector<std::pair<int, MovementEntry>> tempLoaded;
 
-        for (const auto& entry : fs::directory_iterator(GESTURES_DIR)) {
+        for (const auto& entry : fs::directory_iterator(gesturesDir)) {
             if (entry.path().extension() == ".json") {
                 std::string fileName = entry.path().filename().string();
                 loadedGestureFiles.push_back(fileName);
@@ -691,7 +813,12 @@ namespace ActionMenuUI {
     }
 
     inline void SaveGesturesToJson() {
-        fs::create_directories(GESTURES_DIR);
+        std::error_code ec;
+        fs::create_directories(GESTURES_DIR, ec);
+        if (ec) {
+            logger::error("[Input Manager] Error creating Gestures directory: {}", ec.message());
+            return;
+        }
         std::vector<std::string> uniqueFiles;
         for (const auto& g : movementList) {
             std::string file = SanitizeFileName(g.name);
@@ -766,10 +893,17 @@ namespace ActionMenuUI {
     inline void LoadMotionsFromJson() {
         motionList.clear();
         loadedMotionFiles.clear();
-        fs::create_directories(MOTIONS_DIR);
+        std::error_code ec;
+        CopyLegacyDirectoryFilesIfMissing(MOTIONS_DIR, LEGACY_MOTIONS_DIR);
+        fs::create_directories(MOTIONS_DIR, ec);
+        if (ec) {
+            logger::error("[Input Manager] Error creating Motions directory: {}", ec.message());
+            return;
+        }
+        const auto motionsDir = ResolveLoadDirectory(MOTIONS_DIR, LEGACY_MOTIONS_DIR);
         std::vector<std::pair<int, MotionEntry>> tempLoaded;
 
-        for (const auto& entry : fs::directory_iterator(MOTIONS_DIR)) {
+        for (const auto& entry : fs::directory_iterator(motionsDir)) {
             if (entry.path().extension() == ".json") {
                 loadedMotionFiles.push_back(entry.path().filename().string());
                 std::ifstream ifs(entry.path());
@@ -1110,6 +1244,8 @@ namespace ActionMenuUI {
         static int m_activeIndex = -1;
         static bool m_activePad = false;
         static std::chrono::steady_clock::time_point m_uiStartTime;
+        static bool m_openCapturePopup = false;
+        static bool m_enterArmed = false;
 
         // Variaveis e Arrays para a interface de edição
         static std::vector<std::string> pcOptStrs;
@@ -1147,81 +1283,20 @@ namespace ActionMenuUI {
         auto keyMgr = PluginLogic::KeyManager::GetSingleton();
         bool isCapturing = (m_state != M_NONE && m_activeIndex >= 0 && m_activeIndex < motionList.size());
 
-        if (isCapturing) {
-            ImGuiMCP::TextColored({ 1.0f, 0.5f, 0.0f, 1.0f }, "%s", GetLoc("motion.capture_mode", ">>> MOTION CAPTURE/TEST MODE <<<"));
-            auto& motion = motionList[m_activeIndex];
-            float maxT = motion.timeWindow;
-
-            if (m_state == M_WAITING_REC || m_state == M_WAITING_TEST) {
-                ImGuiMCP::Text("%s", GetLoc("motion.press_enter", "Prepare yourself and press [ENTER] to START."));
-                if (ImGuiMCP::IsKeyPressed(ImGuiMCP::ImGuiKey_Enter)) {
-                    m_uiStartTime = std::chrono::steady_clock::now();
-                    if (m_state == M_WAITING_REC) {
-                        keyMgr->StartMotionRecording(m_activeIndex, m_activePad);
-                        m_state = M_RECORDING;
-                    }
-                    else {
-                        keyMgr->StartMotionTesting(m_activeIndex, m_activePad);
-                        m_state = M_TESTING;
-                    }
-                }
-                ImGuiMCP::Spacing();
-                if (ImGuiMCP::Button(GetLoc("common.cancel", "Cancel"))) { m_state = M_NONE; m_activeIndex = -1; }
-            }
-            else if (m_state == M_RECORDING) {
-                ImGuiMCP::TextColored({ 1.0f, 0.2f, 0.2f, 1.0f }, "%s", GetLoc("motion.recording", ">>> RECORDING IN PROGRESS <<<"));
-                float elapsed = std::chrono::duration<float>(std::chrono::steady_clock::now() - m_uiStartTime).count();
-                float prog = std::min(elapsed / maxT, 1.0f);
-
-                char buf[32]; snprintf(buf, sizeof(buf), "%.1f / %.1fs", elapsed, maxT);
-                ImGuiMCP::ProgressBar(prog, { -1.0f, 0.0f }, buf);
-                ImGuiMCP::Spacing();
-
-                auto seq = keyMgr->GetRecordedMotion();
-                if (seq.size() > 20) seq.resize(20);
-                std::string s = GetLoc("motion.captured", "Captured: ");
-                for (auto k : seq) s += "[" + FormatMotionKey(k) + "] ";
-                ImGuiMCP::TextWrapped("%s", s.c_str());
-
-                if (!keyMgr->IsRecordingMotion() || seq.size() >= 20) {
-                    if (m_activePad) motion.padSequence = seq; else motion.pcSequence = seq;
-                    if (keyMgr->IsRecordingMotion()) keyMgr->StopMotionRecording();
-                    m_state = M_NONE; m_activeIndex = -1;
-                }
-            }
-            else if (m_state == M_TESTING) {
-                ImGuiMCP::TextColored({ 0.2f, 1.0f, 1.0f, 1.0f }, "%s", GetLoc("motion.testing", ">>> TESTING IN PROGRESS <<<"));
-                ImGuiMCP::Text("%s", GetLoc("motion.execute_now", "Execute the sequence now!"));
-
-                float elapsed = std::chrono::duration<float>(std::chrono::steady_clock::now() - m_uiStartTime).count();
-                float prog = std::min(elapsed / maxT, 1.0f);
-
-                char buf[32]; snprintf(buf, sizeof(buf), "%.1f / %.1fs", elapsed, maxT);
-                ImGuiMCP::ProgressBar(prog, { -1.0f, 0.0f }, buf);
-
-                if (keyMgr->GetMotionTestSuccess() || !keyMgr->IsTestingMotion()) m_state = M_TEST_DONE;
-            }
-            else if (m_state == M_TEST_DONE) {
-                if (keyMgr->GetMotionTestSuccess()) {
-                    ImGuiMCP::TextColored({ 0.2f, 1.0f, 0.2f, 1.0f }, "%s", GetLoc("motion.success", "SUCCESS! Motion executed correctly!"));
-                }
-                else {
-                    ImGuiMCP::TextColored({ 1.0f, 0.2f, 0.2f, 1.0f }, "%s", GetLoc("motion.failed", "FAILED! You ran out of time or pressed wrong buttons."));
-                }
-                ImGuiMCP::Spacing();
-                if (ImGuiMCP::Button(GetLoc("common.close", "Close"))) {
-                    keyMgr->ResetMotionTest();
-                    m_state = M_NONE; m_activeIndex = -1;
-                }
-            }
-
-            ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
-            ImGuiMCP::BeginDisabled();
-        }
+        if (isCapturing) ImGuiMCP::BeginDisabled();
 
         auto motionListeners = PluginLogic::KeyManager::GetSingleton()->GetMotionListeners();
+        static char motionFilterName[128] = "";
+        ImGuiMCP::SetNextItemWidth(320.0f);
+        ImGuiMCP::InputText(GetLoc("common.filter", "Filter"), motionFilterName, sizeof(motionFilterName));
+        const std::string lowerMotionFilterName = ToLower(motionFilterName);
+        ImGuiMCP::Spacing();
+
         for (size_t i = 0; i < motionList.size(); ++i) {
             auto& motion = motionList[i];
+            if (!lowerMotionFilterName.empty() && ToLower(motion.name).find(lowerMotionFilterName) == std::string::npos) {
+                continue;
+            }
             ImGuiMCP::PushID(static_cast<int>(i));
 
             std::string headerLabel = "[" + std::to_string(i) + "] " + std::string(motion.name) + "###motionHeader_" + std::to_string(i);
@@ -1315,11 +1390,11 @@ namespace ActionMenuUI {
                     ImGuiMCP::TextWrapped("%s", pcStr.empty() ? GetLoc("common.none", "None") : pcStr.c_str());
 
                     if (ImGuiMCP::Button(GetLoc("motion.rec_pc", "Record PC"))) {
-                        m_activeIndex = static_cast<int>(i); m_activePad = false; m_state = M_WAITING_REC; m_editIndex = -1;
+                        m_activeIndex = static_cast<int>(i); m_activePad = false; m_state = M_WAITING_REC; m_editIndex = -1; m_openCapturePopup = true;
                     }
                     ImGuiMCP::SameLine();
                     if (ImGuiMCP::Button(GetLoc("motion.test_pc", "Test PC"))) {
-                        m_activeIndex = static_cast<int>(i); m_activePad = false; m_state = M_WAITING_TEST; m_editIndex = -1;
+                        m_activeIndex = static_cast<int>(i); m_activePad = false; m_state = M_WAITING_TEST; m_editIndex = -1; m_openCapturePopup = true;
                     }
                     ImGuiMCP::SameLine();
                     if (ImGuiMCP::Button(GetLoc("motion.edit_pc", "Edit Sequence##pc"))) {
@@ -1384,11 +1459,11 @@ namespace ActionMenuUI {
                     ImGuiMCP::TextWrapped("%s", padStr.empty() ? GetLoc("common.none", "None") : padStr.c_str());
 
                     if (ImGuiMCP::Button(GetLoc("motion.rec_pad", "Record Gamepad"))) {
-                        m_activeIndex = static_cast<int>(i); m_activePad = true; m_state = M_WAITING_REC; m_editIndex = -1;
+                        m_activeIndex = static_cast<int>(i); m_activePad = true; m_state = M_WAITING_REC; m_editIndex = -1; m_openCapturePopup = true;
                     }
                     ImGuiMCP::SameLine();
                     if (ImGuiMCP::Button(GetLoc("motion.test_pad", "Test Gamepad"))) {
-                        m_activeIndex = static_cast<int>(i); m_activePad = true; m_state = M_WAITING_TEST; m_editIndex = -1;
+                        m_activeIndex = static_cast<int>(i); m_activePad = true; m_state = M_WAITING_TEST; m_editIndex = -1; m_openCapturePopup = true;
                     }
                     ImGuiMCP::SameLine();
                     if (ImGuiMCP::Button(GetLoc("motion.edit_pad", "Edit Sequence##pad"))) {
@@ -1403,7 +1478,7 @@ namespace ActionMenuUI {
                     ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
                     ImGuiMCP::TextColored({ 0.9f, 0.6f, 1.0f, 1.0f }, "%s", GetLoc("common.connected_mods", "Mods Connected:"));
                     for (const auto& listener : activeListeners) {
-                        ImGuiMCP::BulletText("Mod: '%s'  |  Purpose: '%s'", listener.modName.c_str(), listener.purpose.c_str());
+                        ImGuiMCP::BulletText(GetLoc("common.mod_purpose_line", "Mod: '%s'  |  Purpose: '%s'"), listener.modName.c_str(), listener.purpose.c_str());
                     }
                 }
 
@@ -1423,6 +1498,138 @@ namespace ActionMenuUI {
             ImGuiMCP::PopID();
         }
         if (isCapturing) ImGuiMCP::EndDisabled();
+
+        const char* capturePopupTitle = GetLoc("motion.capture_popup_title", "Motion Capture / Test");
+        if (m_openCapturePopup) {
+            // A new capture must always wait for Enter to be released, then pressed again.
+            m_enterArmed = false;
+            ImGuiMCP::OpenPopup(capturePopupTitle);
+            m_openCapturePopup = false;
+        }
+
+        ImGuiMCP::SetNextWindowSizeConstraints({ 644.0f, 0.0f }, { 980.0f, 650.0f });
+        if (ImGuiMCP::BeginPopupModal(capturePopupTitle, nullptr, ImGuiMCP::ImGuiWindowFlags_AlwaysAutoResize)) {
+            const bool hasActiveMotion = m_activeIndex >= 0 && m_activeIndex < static_cast<int>(motionList.size());
+            if (!hasActiveMotion) {
+                keyMgr->StopMotionRecording();
+                keyMgr->ResetMotionTest();
+                m_state = M_NONE;
+                m_activeIndex = -1;
+                ImGuiMCP::CloseCurrentPopup();
+            }
+            else {
+                auto& motion = motionList[m_activeIndex];
+                const float maxT = motion.timeWindow;
+                const auto& expectedSequence = m_activePad ? motion.padSequence : motion.pcSequence;
+
+                ImGuiMCP::TextColored({ 1.0f, 0.5f, 0.0f, 1.0f }, "%s", GetLoc("motion.capture_mode", ">>> MOTION CAPTURE/TEST MODE <<<"));
+                ImGuiMCP::Text("%s: %s", GetLoc("common.name", "Name"), motion.name);
+                ImGuiMCP::Separator(); ImGuiMCP::Spacing();
+
+                const bool isTestFlow = m_state == M_WAITING_TEST || m_state == M_TESTING || m_state == M_TEST_DONE;
+                if (isTestFlow) {
+                    std::string expected = GetLoc("motion.expected_order", "Expected input order:");
+                    for (size_t i = 0; i < expectedSequence.size(); ++i) {
+                        expected += " " + std::to_string(i + 1) + ". [" + FormatMotionKey(expectedSequence[i]) + "]";
+                        if (i + 1 < expectedSequence.size()) expected += "  ->";
+                    }
+                    ImGuiMCP::TextWrapped("%s", expected.c_str());
+                    ImGuiMCP::Spacing();
+                }
+
+                if (m_state == M_WAITING_REC || m_state == M_WAITING_TEST) {
+                    ImGuiMCP::Text("%s", GetLoc("motion.press_enter", "Prepare yourself and press [ENTER] to START."));
+                    if (!ImGuiMCP::IsKeyDown(ImGuiMCP::ImGuiKey_Enter)) {
+                        m_enterArmed = true;
+                    }
+                    if (m_enterArmed && ImGuiMCP::IsKeyPressed(ImGuiMCP::ImGuiKey_Enter, false)) {
+                        m_enterArmed = false;
+                        m_uiStartTime = std::chrono::steady_clock::now();
+                        if (m_state == M_WAITING_REC) {
+                            keyMgr->StartMotionRecording(m_activeIndex, m_activePad);
+                            m_state = M_RECORDING;
+                        }
+                        else {
+                            keyMgr->StartMotionTesting(m_activeIndex, m_activePad);
+                            m_state = M_TESTING;
+                        }
+                    }
+                }
+                else if (m_state == M_RECORDING) {
+                    ImGuiMCP::TextColored({ 1.0f, 0.2f, 0.2f, 1.0f }, "%s", GetLoc("motion.recording", ">>> RECORDING IN PROGRESS <<<"));
+                    const float elapsed = std::chrono::duration<float>(std::chrono::steady_clock::now() - m_uiStartTime).count();
+                    const float prog = std::min(elapsed / maxT, 1.0f);
+                    char buf[32]; snprintf(buf, sizeof(buf), "%.1f / %.1fs", elapsed, maxT);
+                    ImGuiMCP::ProgressBar(prog, { 588.0f, 0.0f }, buf);
+
+                    auto seq = keyMgr->GetRecordedMotion();
+                    if (seq.size() > 20) seq.resize(20);
+                    std::string captured = GetLoc("motion.captured", "Captured: ");
+                    for (size_t i = 0; i < seq.size(); ++i) {
+                        captured += std::to_string(i + 1) + ". [" + FormatMotionKey(seq[i]) + "] ";
+                    }
+                    ImGuiMCP::TextWrapped("%s", captured.c_str());
+
+                    const bool recordingFinished = elapsed >= maxT || !keyMgr->IsRecordingMotion() || seq.size() >= 20;
+                    if (recordingFinished) {
+                        if (m_activePad) motion.padSequence = seq; else motion.pcSequence = seq;
+                        if (keyMgr->IsRecordingMotion()) keyMgr->StopMotionRecording();
+                        m_state = M_NONE; m_activeIndex = -1;
+                        ImGuiMCP::CloseCurrentPopup();
+                    }
+                }
+                else if (m_state == M_TESTING || m_state == M_TEST_DONE) {
+                    const auto testInputs = keyMgr->GetMotionTestInputs();
+                    bool correctPrefix = testInputs.size() <= expectedSequence.size();
+                    for (size_t i = 0; correctPrefix && i < testInputs.size(); ++i) {
+                        correctPrefix = testInputs[i] == expectedSequence[i];
+                    }
+
+                    std::string entered = GetLoc("motion.test_inputs", "Inputs entered:");
+                    for (size_t i = 0; i < testInputs.size(); ++i) {
+                        entered += " " + std::to_string(i + 1) + ". [" + FormatMotionKey(testInputs[i]) + "]";
+                        if (i + 1 < testInputs.size()) entered += "  ->";
+                    }
+                    const auto enteredColor = correctPrefix ? ImGuiMCP::ImVec4{ 0.3f, 1.0f, 0.3f, 1.0f } : ImGuiMCP::ImVec4{ 1.0f, 0.3f, 0.3f, 1.0f };
+                    ImGuiMCP::PushTextWrapPos(924.0f);
+                    ImGuiMCP::TextColored(enteredColor, "%s", entered.c_str());
+                    ImGuiMCP::PopTextWrapPos();
+                    ImGuiMCP::Spacing();
+
+                    if (m_state == M_TESTING) {
+                        ImGuiMCP::TextColored({ 0.2f, 1.0f, 1.0f, 1.0f }, "%s", GetLoc("motion.testing", ">>> TESTING IN PROGRESS <<<"));
+                        ImGuiMCP::Text("%s", GetLoc("motion.execute_now", "Execute the sequence now!"));
+                        const float elapsed = std::chrono::duration<float>(std::chrono::steady_clock::now() - m_uiStartTime).count();
+                        const float prog = std::min(elapsed / maxT, 1.0f);
+                        char buf[32]; snprintf(buf, sizeof(buf), "%.1f / %.1fs", elapsed, maxT);
+                        ImGuiMCP::ProgressBar(prog, { 588.0f, 0.0f }, buf);
+                        if (keyMgr->GetMotionTestSuccess() || !keyMgr->IsTestingMotion() || elapsed >= maxT) m_state = M_TEST_DONE;
+                    }
+                    else if (keyMgr->GetMotionTestSuccess()) {
+                        ImGuiMCP::TextColored({ 0.2f, 1.0f, 0.2f, 1.0f }, "%s", GetLoc("motion.success", "SUCCESS! Motion executed correctly!"));
+                    }
+                    else {
+                        ImGuiMCP::TextColored({ 1.0f, 0.2f, 0.2f, 1.0f }, "%s", GetLoc("motion.failed", "FAILED! You ran out of time or pressed wrong buttons."));
+                    }
+                }
+
+                ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
+                if (m_state == M_TEST_DONE) {
+                    if (ImGuiMCP::Button(GetLoc("common.close", "Close"))) {
+                        keyMgr->ResetMotionTest();
+                        m_state = M_NONE; m_activeIndex = -1;
+                        ImGuiMCP::CloseCurrentPopup();
+                    }
+                }
+                else if (ImGuiMCP::Button(GetLoc("common.cancel", "Cancel"))) {
+                    if (m_state == M_RECORDING) keyMgr->StopMotionRecording();
+                    if (m_state == M_TESTING) keyMgr->ResetMotionTest();
+                    m_state = M_NONE; m_activeIndex = -1;
+                    ImGuiMCP::CloseCurrentPopup();
+                }
+            }
+            ImGuiMCP::EndPopup();
+        }
     }
 
     inline void RenderSummaryDashboard(const std::vector<PluginLogic::ModListener>& listeners, const std::vector<PluginLogic::ModListener>& motionListeners) {
@@ -1452,7 +1659,7 @@ namespace ActionMenuUI {
         ImGuiMCP::SameLine();
 
         if (ImGuiMCP::BeginCombo(GetLoc("common.key", "Key"), dashSelectedKeyFilter.empty() ? GetLoc("dash.all_keys", "All Keys") : dashSelectedKeyFilter.c_str())) {
-            ImGuiMCP::InputText("Search##dashKeySearch", dashKeySearchBuf, sizeof(dashKeySearchBuf));
+            ImGuiMCP::InputText((std::string(GetLoc("common.search", "Search")) + "##dashKeySearch").c_str(), dashKeySearchBuf, sizeof(dashKeySearchBuf));
             std::string searchLower = ToLower(dashKeySearchBuf);
             ImGuiMCP::Separator();
 
@@ -1475,7 +1682,7 @@ namespace ActionMenuUI {
         ImGuiMCP::SameLine();
 
         if (ImGuiMCP::BeginCombo(GetLoc("common.mod", "Mod"), dashSelectedModFilter.empty() ? GetLoc("dash.all_mods", "All Mods") : dashSelectedModFilter.c_str())) {
-            ImGuiMCP::InputText("Search##dashModSearch", dashModSearchBuf, sizeof(dashModSearchBuf));
+            ImGuiMCP::InputText((std::string(GetLoc("common.search", "Search")) + "##dashModSearch").c_str(), dashModSearchBuf, sizeof(dashModSearchBuf));
             std::string modSearchLower = ToLower(dashModSearchBuf);
             ImGuiMCP::Separator();
 
@@ -1577,7 +1784,7 @@ namespace ActionMenuUI {
                         ImGuiMCP::TableNextRow();
                         ImGuiMCP::TableSetColumnIndex(0);
                         ImGuiMCP::Indent();
-                        ImGuiMCP::TextColored({ 0.7f, 0.7f, 0.7f, 1.0f }, "ID: %d - %s", actionID, action.name);
+                        ImGuiMCP::TextColored({ 0.7f, 0.7f, 0.7f, 1.0f }, GetLoc("common.id", "ID: %d - %s"), actionID, action.name);
                         ImGuiMCP::Unindent();
 
                         ImGuiMCP::TableSetColumnIndex(1);
@@ -2104,7 +2311,7 @@ namespace ActionMenuUI {
         ImGuiMCP::SameLine();
 
         if (ImGuiMCP::BeginCombo(GetLoc("common.key", "Key"), selectedKeyFilter.empty() ? GetLoc("dash.all_keys", "All Keys") : selectedKeyFilter.c_str())) {
-            ImGuiMCP::InputText("Search##keySearch", keySearchBuf, sizeof(keySearchBuf));
+            ImGuiMCP::InputText((std::string(GetLoc("common.search", "Search")) + "##keySearch").c_str(), keySearchBuf, sizeof(keySearchBuf));
             std::string searchLower = ToLower(keySearchBuf);
             ImGuiMCP::Separator();
 
@@ -2124,7 +2331,7 @@ namespace ActionMenuUI {
         ImGuiMCP::SameLine();
 
         if (ImGuiMCP::BeginCombo(GetLoc("common.mod", "Mod"), selectedModFilter.empty() ? GetLoc("dash.all_mods", "All Mods") : selectedModFilter.c_str())) {
-            ImGuiMCP::InputText("Search##modSearch", modSearchBuf, sizeof(modSearchBuf));
+            ImGuiMCP::InputText((std::string(GetLoc("common.search", "Search")) + "##modSearch").c_str(), modSearchBuf, sizeof(modSearchBuf));
             std::string modSearchLower = ToLower(modSearchBuf);
             ImGuiMCP::Separator();
 
@@ -2538,6 +2745,7 @@ namespace ActionMenuUI {
 
     inline void Register() {
         if (!SKSEMenuFramework::IsInstalled()) return;
+        MigrateLegacySettings();
         LoadLanguage();
         LoadCacheFromJson();
         LoadSettingsFromJson();
@@ -2545,11 +2753,11 @@ namespace ActionMenuUI {
         LoadGesturesFromJson();
         LoadMotionsFromJson();
         GenerateDefaultActions();
-        SKSEMenuFramework::SetSection("Input Manager");
+        SKSEMenuFramework::SetSection(GetLoc("menu.section", "Input Manager"));
         SKSEMenuFramework::AddSectionItem(GetLoc("menu.tab_inputs", "Inputs"), RenderMenu);
         SKSEMenuFramework::AddSectionItem(GetLoc("menu.tab_motions", "Motion Inputs"), RenderMotionMenu);
         SKSEMenuFramework::AddSectionItem(GetLoc("menu.tab_gestures", "Gestures"), RenderGesturesMenu);
         SKSEMenuFramework::AddSectionItem(GetLoc("menu.tab_dashboard", "Inputs in use"), RenderDashboardMenu);
-        SKSEMenuFramework::AddSectionItem(GetLoc("menu.tab_debug", "Debug / Advanced"), RenderDebugMenu);
+        SKSEMenuFramework::AddSectionItem(GetLoc("menu.tab_debug", "Debug"), RenderDebugMenu);
     }
 }
