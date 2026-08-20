@@ -4,7 +4,11 @@
 #include <unordered_map>
 #include <vector>
 #include <chrono>
+#include <condition_variable>
+#include <atomic>
 #include <mutex>
+#include <optional>
+#include <thread>
 #include "Manager.h"
 
 namespace PluginLogic {
@@ -22,17 +26,16 @@ namespace PluginLogic {
         uint32_t mainKey;                 // Primeira Tecla (Gatilho)
         ActionState mainActionType;       // Estado exigido para a 1ª Tecla
         int mainTapCount = 1;             // Quantidade de taps exigidos para a tecla principal
-        bool pcDelayTap = false;
-        bool needsDelay = false;
         uint32_t modifierKey;             // Segunda Tecla (Parceira)
         ActionState modifierActionType;   // Estado exigido para a 2ª Tecla
         int modTapCount = 1;              // Quantidade de taps exigidos para o modificador
-        bool gamepadDelayTap = false;
-        bool useCustomTimings = false;      // Checkbox: Esperar pelo Double Tap?
+        bool tapBeforeHold = false;       // Tap -> Hold quando a combinação contém ambos
+        bool useCustomTimings = false;
         float holdDuration = 0.5f;        // Janela para considerar "Hold"
-        float tapWindow = 0.35f;     // Janela para o 2º clique ou para o cruzamento de Taps
+        float tapWindow = 0.35f;           // Janela da sequência de taps
         int gestureIndex = -1;
         int gamepadGestureStick = 0;
+        bool isGamepad = false;
     };
 
     struct KeyBinding {
@@ -107,14 +110,83 @@ namespace PluginLogic {
         bool IsTestingMotion() const { return _testingMotionIndex != -1; }
 
     private:
-        KeyManager() = default;
-        ~KeyManager() = default;
+        using Clock = std::chrono::steady_clock;
+        using TimePoint = Clock::time_point;
+
+        struct TapGroupKey {
+            uint32_t tapKey = 0;
+            uint32_t anchorKey = 0;
+            ActionState anchorState = ActionState::kIgnored;
+            int anchorTapCount = 1;
+            bool tapBeforeHold = false;
+            bool isGamepad = false;
+
+            bool operator==(const TapGroupKey&) const = default;
+        };
+
+        struct TapCandidate {
+            std::string bindingName;
+            int requiredTaps = 1;
+            float tapWindow = 0.35f;
+            float holdDuration = 0.5f;
+        };
+
+        struct TapPlan {
+            TapGroupKey key;
+            std::vector<TapCandidate> candidates;
+            int maximumTapCount = 0;
+            float effectiveWindow = 0.0f;
+        };
+
+        struct TapSample {
+            TimePoint upTime;
+            float pressDuration = 0.0f;
+            bool anchorDown = false;
+            float anchorHeldDuration = 0.0f;
+        };
+
+        struct PendingTapSequence {
+            uint64_t burstID = 0;
+            TapPlan plan;
+            TimePoint deadline;
+            std::vector<TapSample> samples;
+            bool anchorSatisfied = false;
+            TimePoint anchorSatisfiedAt;
+            std::vector<TimePoint> anchorTapTimes;
+            bool holdAnchorStarted = false;
+            TimePoint holdAnchorDownAt;
+            bool tapPressInProgress = false;
+            uint64_t bindingGeneration = 0;
+        };
+
+        struct TapResolution {
+            std::string bindingName;
+            uint64_t bindingGeneration = 0;
+            uint64_t burstID = 0;
+            uint32_t tapKey = 0;
+            uint32_t anchorKey = 0;
+            ActionState anchorState = ActionState::kIgnored;
+            bool isGamepad = false;
+        };
+
+        KeyManager();
+        ~KeyManager();
         KeyManager(const KeyManager&) = delete;
         KeyManager& operator=(const KeyManager&) = delete;
 
         uint32_t GetUnifiedKeyCode(RE::ButtonEvent* a_event);
 
         bool IsConditionMet(uint32_t keyCode, ActionState requiredState, int requiredTapCount, std::chrono::steady_clock::time_point now, float tapWindow, float holdDuration, bool isModifier = false);
+        void RebuildTapPlans();
+        void HandleTapKeyDown(uint32_t keyCode, bool isGamepad, TimePoint now);
+        void HandleTapRelease(uint32_t keyCode, bool isGamepad, float pressDuration, TimePoint now);
+        bool IsTapCandidateValid(const PendingTapSequence& sequence, const TapCandidate& candidate) const;
+        std::optional<TapResolution> FindTapResolutionLocked(uint64_t burstID, bool immediateOnly) const;
+        void RemoveTapBurstLocked(uint64_t burstID, const std::optional<TapResolution>& resolution);
+        void DispatchTapResolution(const TapResolution& resolution, bool alreadyOnGameThread);
+        void CommitTapResolution(const std::string& bindingName, uint64_t bindingGeneration);
+        void TapSchedulerLoop(std::stop_token stopToken);
+        void CancelPendingTaps();
 
         void ExecuteCallback(const std::string& name);
         void ExecuteReleaseCallback(const std::string& name);
@@ -141,6 +213,15 @@ namespace PluginLogic {
         std::vector<KeyBinding> _bindings;
         std::vector<ModListener> _listeners;
         std::vector<ModListener> _motionListeners;
+
+        std::vector<TapPlan> _tapPlans;
+        std::mutex _tapMutex;
+        std::condition_variable _tapCondition;
+        std::vector<PendingTapSequence> _pendingTapSequences;
+        uint64_t _nextTapBurstID = 1;
+        uint64_t _tapScheduleRevision = 0;
+        std::atomic<uint64_t> _bindingGeneration{ 1 };
+        std::jthread _tapScheduler;
 
         mutable std::mutex _gestureMutex; // Mutex para Thread-Safety
         bool _isDrawingGesture = false;

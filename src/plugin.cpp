@@ -7,7 +7,21 @@
 #include "Hooks.h"
 
 extern "C" __declspec(dllexport) void* GetInputManagerAPI() {
-    return InputManagerAPI::InputManagerAPI_Impl::GetSingleton();
+    return static_cast<InputManagerAPI::IInputManager*>(
+        InputManagerAPI::InputManagerAPI_Impl::GetSingleton());
+}
+
+extern "C" __declspec(dllexport) void* GetInputManagerAPIEx(
+    uint32_t requestedVersion) {
+
+    auto* api = InputManagerAPI::InputManagerAPI_Impl::GetSingleton();
+    if (requestedVersion == InputManagerAPI::kAPIVersion1) {
+        return static_cast<InputManagerAPI::IInputManager*>(api);
+    }
+    if (requestedVersion == InputManagerAPI::kAPIVersion2) {
+        return static_cast<InputManagerAPI::IInputManagerV2*>(api);
+    }
+    return nullptr;
 }
 
 namespace InputManagerAPI {
@@ -56,126 +70,304 @@ namespace InputManagerAPI {
         return info;
     }
 
-    bool InputManagerAPI_Impl::UpdateActionMapping(int actionID, const ActionInfo& newMapping) {
-        if (actionID < 0 || actionID >= ActionMenuUI::actionList.size()) return false;
+    namespace {
 
-        if (newMapping.pcModAction == 3 && (newMapping.pcMainAction != 2 && newMapping.pcMainAction != 4)) return false;
-        if (newMapping.gamepadModAction == 3 && (newMapping.gamepadMainAction != 2 && newMapping.gamepadMainAction != 4)) return false;
+        template <class... Args>
+        ActionUpdateResultV2 MakeActionUpdateResult(
+            ActionUpdateCode code,
+            int requestedActionID,
+            int conflictingActionID,
+            const char* messageFormat,
+            Args... args) {
 
-        // Extrair os valores reais baseados na tua lógica
-        int newPcGestIndex = (newMapping.pcModAction == 3) ? newMapping.pcModifierKey : -1;
-        int newPcModKey = (newMapping.pcModAction == 3) ? 0 : newMapping.pcModifierKey;
-
-        int newPadGestIndex = (newMapping.gamepadModAction == 3) ? newMapping.gamepadModifierKey : -1;
-        int newPadModKey = (newMapping.gamepadModAction == 3) ? 0 : newMapping.gamepadModifierKey;
-
-        int finalGestureIndex = (newPcGestIndex != -1) ? newPcGestIndex : newPadGestIndex;
-
-        // Verifica se o nome foi alterado e previne conflitos de nome de arquivo
-        if (newMapping.name && strlen(newMapping.name) > 0) {
-            std::string newSanitizedName = ActionMenuUI::SanitizeFileName(newMapping.name);
-            for (size_t i = 0; i < ActionMenuUI::actionList.size(); ++i) {
-                if (i == actionID) continue;
-                if (ActionMenuUI::SanitizeFileName(ActionMenuUI::actionList[i].name) == newSanitizedName) {
-                    return false; // Falha: geraria um arquivo JSON duplicado com outra action
-                }
-            }
+            ActionUpdateResultV2 result;
+            result.success = code == ActionUpdateCode::kSuccess;
+            result.code = code;
+            result.requestedActionID = requestedActionID;
+            result.conflictingActionID = conflictingActionID;
+            snprintf(
+                result.message,
+                sizeof(result.message),
+                messageFormat,
+                args...);
+            result.message[sizeof(result.message) - 1] = '\0';
+            return result;
         }
 
-        auto CheckComboConflict = [](
-            int aMKey, int aMAct, int aMTap, int aModKey, int aModAct, int aModTap, int aGest,
-            int bMKey, int bMAct, int bMTap, int bModKey, int bModAct, int bModTap, int bGest) {
+        bool CheckActionComboConflict(
+            int aMKey, int aMAct, int aMTap,
+            int aModKey, int aModAct, int aModTap,
+            int aGest, int aTapHoldOrder,
+            int bMKey, int bMAct, int bMTap,
+            int bModKey, int bModAct, int bModTap,
+            int bGest, int bTapHoldOrder) {
 
-                if (aMKey == 0 || bMKey == 0) return false;
-
-                // Normaliza Ignore e Gesture
-                if (aModAct == 0 || aModAct == 3) aModKey = 0;
-                if (bModAct == 0 || bModAct == 3) bModKey = 0;
-
-                // AJUSTE: Normaliza Press (4) para Hold (2) para avaliar conflitos apenas se o modo avançado NÃO estiver ativo
-                int normAMAct = (!ActionMenuUI::advancedMode && aMAct == 4) ? 2 : aMAct;
-                int normBMAct = (!ActionMenuUI::advancedMode && bMAct == 4) ? 2 : bMAct;
-                int normAModAct = (!ActionMenuUI::advancedMode && aModAct == 4) ? 2 : aModAct;
-                int normBModAct = (!ActionMenuUI::advancedMode && bModAct == 4) ? 2 : bModAct;
-
-                // Se houver gestos, tratamos isoladamente
-                if (aModAct == 3 || bModAct == 3) {
-                    if (aMKey == bMKey && normAMAct == normBMAct && aModAct == bModAct) {
-                        return aGest == bGest;
-                    }
-                    return false;
-                }
-
-                // Verifica se usam exatamente as mesmas duas teclas (ordem direta ou invertida)
-                bool sameKeysDirect = (aMKey == bMKey && aModKey == bModKey);
-                bool sameKeysReversed = (aMKey == bModKey && aModKey == bMKey);
-
-                if (sameKeysDirect || sameKeysReversed) {
-                    int aKey1State, aKey1Tap, aKey2State, aKey2Tap;
-                    int bKey1State, bKey1Tap, bKey2State, bKey2Tap;
-
-                    if (sameKeysDirect) {
-                        aKey1State = normAMAct; aKey1Tap = aMTap;
-                        aKey2State = normAModAct; aKey2Tap = aModTap;
-                        bKey1State = normBMAct; bKey1Tap = bMTap;
-                        bKey2State = normBModAct; bKey2Tap = bModTap;
-                    }
-                    else {
-                        aKey1State = normAMAct; aKey1Tap = aMTap;
-                        aKey2State = normAModAct; aKey2Tap = aModTap;
-                        bKey1State = normBModAct; bKey1Tap = bModTap;
-                        bKey2State = normBMAct; bKey2Tap = bMTap;
-                    }
-
-                    // Verifica permutação exata de estados
-                    bool matchDirect = (aKey1State == bKey1State && (aKey1State != 1 || aKey1Tap == bKey1Tap)) &&
-                        (aKey2State == bKey2State && (aKey2State != 1 || aKey2Tap == bKey2Tap));
-
-                    bool matchCross = (aKey1State == bKey2State && (aKey1State != 1 || aKey1Tap == bKey2Tap)) &&
-                        (aKey2State == bKey1State && (aKey2State != 1 || aKey2Tap == bKey1Tap));
-
-                    if (matchDirect || matchCross) {
-                        return true;
-                    }
-                }
+            if (aMKey == 0 || bMKey == 0) {
                 return false;
-            };
-
-        for (size_t i = 0; i < ActionMenuUI::actionList.size(); ++i) {
-            if (i == actionID) continue;
-            const auto& b = ActionMenuUI::actionList[i];
-
-            // Check PC configuration
-            if (CheckComboConflict(
-                newMapping.pcMainKey, newMapping.pcMainAction, newMapping.pcMainTapCount,
-                newPcModKey, newMapping.pcModAction, newMapping.pcModTapCount, newPcGestIndex,
-                b.pcMainKey, b.pcMainAction, b.pcMainTapCount,
-                b.pcModifierKey, b.pcModAction, b.pcModTapCount, b.gestureIndex)) {
+            }
+            if (ActionMenuUI::IsTapHoldPair(aMAct, aModAct) &&
+                ActionMenuUI::IsTapHoldPair(bMAct, bModAct) &&
+                aTapHoldOrder != bTapHoldOrder) {
                 return false;
             }
 
-            // Check Gamepad configuration
-            if (CheckComboConflict(
-                newMapping.gamepadMainKey, newMapping.gamepadMainAction, newMapping.gamepadMainTapCount,
-                newPadModKey, newMapping.gamepadModAction, newMapping.gamepadModTapCount, newPadGestIndex,
-                b.gamepadMainKey, b.gamepadMainAction, b.gamepadMainTapCount,
-                b.gamepadModifierKey, b.gamepadModAction, b.gamepadModTapCount, b.gestureIndex)) {
+            if (aModAct == 0 || aModAct == 3) {
+                aModKey = 0;
+            }
+            if (bModAct == 0 || bModAct == 3) {
+                bModKey = 0;
+            }
+
+            const int normAMAct =
+                (!ActionMenuUI::advancedMode && aMAct == 4) ? 2 : aMAct;
+            const int normBMAct =
+                (!ActionMenuUI::advancedMode && bMAct == 4) ? 2 : bMAct;
+            const int normAModAct =
+                (!ActionMenuUI::advancedMode && aModAct == 4) ? 2 : aModAct;
+            const int normBModAct =
+                (!ActionMenuUI::advancedMode && bModAct == 4) ? 2 : bModAct;
+
+            if (aModAct == 3 || bModAct == 3) {
+                return aMKey == bMKey &&
+                    normAMAct == normBMAct &&
+                    aModAct == bModAct &&
+                    aGest == bGest;
+            }
+
+            const bool sameKeysDirect =
+                aMKey == bMKey && aModKey == bModKey;
+            const bool sameKeysReversed =
+                aMKey == bModKey && aModKey == bMKey;
+            if (!sameKeysDirect && !sameKeysReversed) {
                 return false;
             }
+
+            int aKey1State = normAMAct;
+            int aKey1Tap = aMTap;
+            int aKey2State = normAModAct;
+            int aKey2Tap = aModTap;
+            int bKey1State = 0;
+            int bKey1Tap = 1;
+            int bKey2State = 0;
+            int bKey2Tap = 1;
+
+            if (sameKeysDirect) {
+                bKey1State = normBMAct;
+                bKey1Tap = bMTap;
+                bKey2State = normBModAct;
+                bKey2Tap = bModTap;
+            }
+            else {
+                bKey1State = normBModAct;
+                bKey1Tap = bModTap;
+                bKey2State = normBMAct;
+                bKey2Tap = bMTap;
+            }
+
+            const bool matchDirect =
+                aKey1State == bKey1State &&
+                (aKey1State != 1 || aKey1Tap == bKey1Tap) &&
+                aKey2State == bKey2State &&
+                (aKey2State != 1 || aKey2Tap == bKey2Tap);
+            const bool matchCross =
+                aKey1State == bKey2State &&
+                (aKey1State != 1 || aKey1Tap == bKey2Tap) &&
+                aKey2State == bKey1State &&
+                (aKey2State != 1 || aKey2Tap == bKey1Tap);
+            return matchDirect || matchCross;
         }
+
+        ActionUpdateResultV2 ValidateActionUpdate(
+            int actionID,
+            const ActionInfo& newMapping) {
+
+            if (actionID < 0 ||
+                actionID >= static_cast<int>(
+                    ActionMenuUI::actionList.size())) {
+                return MakeActionUpdateResult(
+                    ActionUpdateCode::kInvalidActionID,
+                    actionID,
+                    -1,
+                    "Action ID %d does not exist.",
+                    actionID);
+            }
+            if (newMapping.pcModAction == 3 &&
+                newMapping.pcMainAction != 2 &&
+                newMapping.pcMainAction != 4) {
+                return MakeActionUpdateResult(
+                    ActionUpdateCode::kInvalidPCGesture,
+                    actionID,
+                    -1,
+                    "PC Gesture requires the Main state to be Hold or Press.");
+            }
+            if (newMapping.gamepadModAction == 3 &&
+                newMapping.gamepadMainAction != 2 &&
+                newMapping.gamepadMainAction != 4) {
+                return MakeActionUpdateResult(
+                    ActionUpdateCode::kInvalidGamepadGesture,
+                    actionID,
+                    -1,
+                    "Gamepad Gesture requires the Main state to be Hold or Press.");
+            }
+
+            const int newPcGestIndex =
+                newMapping.pcModAction == 3 ?
+                static_cast<int>(newMapping.pcModifierKey) : -1;
+            const int newPcModKey =
+                newMapping.pcModAction == 3 ?
+                0 : static_cast<int>(newMapping.pcModifierKey);
+            const int newPadGestIndex =
+                newMapping.gamepadModAction == 3 ?
+                static_cast<int>(newMapping.gamepadModifierKey) : -1;
+            const int newPadModKey =
+                newMapping.gamepadModAction == 3 ?
+                0 : static_cast<int>(newMapping.gamepadModifierKey);
+
+            if (newMapping.name && newMapping.name[0] != '\0') {
+                const std::string sanitizedName =
+                    ActionMenuUI::SanitizeFileName(newMapping.name);
+                for (std::size_t i = 0;
+                     i < ActionMenuUI::actionList.size();
+                     ++i) {
+                    if (static_cast<int>(i) == actionID) {
+                        continue;
+                    }
+                    const auto& existing =
+                        ActionMenuUI::actionList[i];
+                    if (ActionMenuUI::SanitizeFileName(existing.name) ==
+                        sanitizedName) {
+                        return MakeActionUpdateResult(
+                            ActionUpdateCode::kNameConflict,
+                            actionID,
+                            static_cast<int>(i),
+                            "The name is already used by action %d ('%s').",
+                            static_cast<int>(i),
+                            existing.name);
+                    }
+                }
+            }
+
+            const auto& current =
+                ActionMenuUI::actionList[actionID];
+            for (std::size_t i = 0;
+                 i < ActionMenuUI::actionList.size();
+                 ++i) {
+                if (static_cast<int>(i) == actionID) {
+                    continue;
+                }
+                const auto& existing =
+                    ActionMenuUI::actionList[i];
+                if (CheckActionComboConflict(
+                        static_cast<int>(newMapping.pcMainKey),
+                        newMapping.pcMainAction,
+                        newMapping.pcMainTapCount,
+                        newPcModKey,
+                        newMapping.pcModAction,
+                        newMapping.pcModTapCount,
+                        newPcGestIndex,
+                        current.pcTapHoldOrder,
+                        existing.pcMainKey,
+                        existing.pcMainAction,
+                        existing.pcMainTapCount,
+                        existing.pcModifierKey,
+                        existing.pcModAction,
+                        existing.pcModTapCount,
+                        existing.gestureIndex,
+                        existing.pcTapHoldOrder)) {
+                    return MakeActionUpdateResult(
+                        ActionUpdateCode::kPCMappingConflict,
+                        actionID,
+                        static_cast<int>(i),
+                        "The PC mapping is already used by action %d ('%s').",
+                        static_cast<int>(i),
+                        existing.name);
+                }
+                if (CheckActionComboConflict(
+                        static_cast<int>(newMapping.gamepadMainKey),
+                        newMapping.gamepadMainAction,
+                        newMapping.gamepadMainTapCount,
+                        newPadModKey,
+                        newMapping.gamepadModAction,
+                        newMapping.gamepadModTapCount,
+                        newPadGestIndex,
+                        current.gamepadTapHoldOrder,
+                        existing.gamepadMainKey,
+                        existing.gamepadMainAction,
+                        existing.gamepadMainTapCount,
+                        existing.gamepadModifierKey,
+                        existing.gamepadModAction,
+                        existing.gamepadModTapCount,
+                        existing.gestureIndex,
+                        existing.gamepadTapHoldOrder)) {
+                    return MakeActionUpdateResult(
+                        ActionUpdateCode::kGamepadMappingConflict,
+                        actionID,
+                        static_cast<int>(i),
+                        "The Gamepad mapping is already used by action %d ('%s').",
+                        static_cast<int>(i),
+                        existing.name);
+                }
+            }
+
+            return MakeActionUpdateResult(
+                ActionUpdateCode::kSuccess,
+                actionID,
+                -1,
+                "Action %d updated successfully.",
+                actionID);
+        }
+    }
+
+    uint32_t InputManagerAPI_Impl::GetAPIVersion() const {
+        return kAPIVersion2;
+    }
+
+    bool InputManagerAPI_Impl::UpdateActionMapping(
+        int actionID,
+        const ActionInfo& newMapping) {
+
+        return UpdateActionMappingV2(actionID, newMapping).success;
+    }
+
+    ActionUpdateResultV2 InputManagerAPI_Impl::UpdateActionMappingV2(
+        int actionID,
+        const ActionInfo& newMapping) {
+
+        auto result = ValidateActionUpdate(actionID, newMapping);
+        if (!result.success) {
+            return result;
+        }
+
+        const int newPcGestIndex =
+            newMapping.pcModAction == 3 ?
+            static_cast<int>(newMapping.pcModifierKey) : -1;
+        const int newPcModKey =
+            newMapping.pcModAction == 3 ?
+            0 : static_cast<int>(newMapping.pcModifierKey);
+        const int newPadGestIndex =
+            newMapping.gamepadModAction == 3 ?
+            static_cast<int>(newMapping.gamepadModifierKey) : -1;
+        const int newPadModKey =
+            newMapping.gamepadModAction == 3 ?
+            0 : static_cast<int>(newMapping.gamepadModifierKey);
+        const int finalGestureIndex =
+            newPcGestIndex != -1 ?
+            newPcGestIndex : newPadGestIndex;
 
         auto& entry = ActionMenuUI::actionList[actionID];
+        const auto previousEntry = entry;
 
-        // Atualiza o nome copiando de forma segura
-        if (newMapping.name && strlen(newMapping.name) > 0) {
-            strncpy_s(entry.name, newMapping.name, sizeof(entry.name) - 1);
-            entry.name[sizeof(entry.name) - 1] = '\0'; // Previne overflow
+        if (newMapping.name && newMapping.name[0] != '\0') {
+            strncpy_s(
+                entry.name,
+                newMapping.name,
+                sizeof(entry.name) - 1);
+            entry.name[sizeof(entry.name) - 1] = '\0';
         }
 
         entry.pcMainKey = newMapping.pcMainKey;
         entry.pcMainAction = newMapping.pcMainAction;
         entry.pcMainTapCount = newMapping.pcMainTapCount;
-
         entry.pcModifierKey = newPcModKey;
         entry.pcModAction = newMapping.pcModAction;
         entry.pcModTapCount = newMapping.pcModTapCount;
@@ -183,22 +375,27 @@ namespace InputManagerAPI {
         entry.gamepadMainKey = newMapping.gamepadMainKey;
         entry.gamepadMainAction = newMapping.gamepadMainAction;
         entry.gamepadMainTapCount = newMapping.gamepadMainTapCount;
-
         entry.gamepadModifierKey = newPadModKey;
         entry.gamepadModAction = newMapping.gamepadModAction;
         entry.gamepadModTapCount = newMapping.gamepadModTapCount;
 
         entry.gestureIndex = finalGestureIndex;
         entry.gamepadGestureStick = newMapping.gamepadGestureStick;
-
         entry.useCustomTimings = newMapping.useCustomTimings;
         entry.holdDuration = newMapping.holdDuration;
         entry.tapWindow = newMapping.tapWindow;
 
-        ActionMenuUI::SaveActionsToJson();
-        ActionMenuUI::SyncActionsWithEngine();
-
-        return true;
+        if (!ActionMenuUI::SaveActionsToJson()) {
+            entry = previousEntry;
+            ActionMenuUI::SyncActionsWithEngine();
+            return MakeActionUpdateResult(
+                ActionUpdateCode::kPersistenceFailure,
+                actionID,
+                -1,
+                "Action %d could not be saved. The previous mapping was restored.",
+                actionID);
+        }
+        return result;
     }
 
     MotionInfo InputManagerAPI_Impl::GetMotionInfo(int motionID) {
@@ -605,14 +802,30 @@ void OnMessage(SKSE::MessagingInterface::Message* message) {
         InstallWindowFocusHook();
     }
     else if (message->type == InputManagerAPI::kMessage_RequestAPI) {
-        auto api = InputManagerAPI::InputManagerAPI_Impl::GetSingleton();
+        auto* api = static_cast<InputManagerAPI::IInputManager*>(
+            InputManagerAPI::InputManagerAPI_Impl::GetSingleton());
         SKSE::GetMessagingInterface()->Dispatch(
             InputManagerAPI::kMessage_ProvideAPI,
             api,
             sizeof(api),
             message->sender
         );
-        logger::info("[InputManager API] Interface fornecida para o mod: {}", message->sender);
+        logger::info(
+            "[InputManager API] V1 interface provided to mod: {}",
+            message->sender);
+    }
+    else if (message->type == InputManagerAPI::kMessage_RequestAPIV2) {
+        auto* api = static_cast<InputManagerAPI::IInputManagerV2*>(
+            InputManagerAPI::InputManagerAPI_Impl::GetSingleton());
+        SKSE::GetMessagingInterface()->Dispatch(
+            InputManagerAPI::kMessage_ProvideAPIV2,
+            api,
+            sizeof(api),
+            message->sender
+        );
+        logger::info(
+            "[InputManager API] V2 interface provided to mod: {}",
+            message->sender);
     }
     else if (message->type == SKSE::MessagingInterface::kNewGame || message->type == SKSE::MessagingInterface::kPostLoadGame) {
     }

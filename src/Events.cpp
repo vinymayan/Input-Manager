@@ -1,13 +1,886 @@
 ﻿#include "Events.h"
 #include "logger.h" 
-#include <thread>
 #include "Settings.h"
+#include <optional>
+#include <ranges>
 
 namespace PluginLogic {
+
+    KeyManager::KeyManager() :
+        _tapScheduler([this](std::stop_token stopToken) {
+            TapSchedulerLoop(stopToken);
+        })
+    {}
+
+    KeyManager::~KeyManager() {
+        _tapScheduler.request_stop();
+        _tapCondition.notify_all();
+    }
 
     void KeyManager::RegisterAction(const std::string& name, ComboKey combo, std::function<void()> callback, std::function<void()> releaseCallback) {
         //logger::info("[KeyManager] Registrando acao: '{}' | MainKey: {} | ModKey: {}", name, combo.mainKey, combo.modifierKey);
         _bindings.push_back({ name, combo, callback, releaseCallback });
+    }
+
+    void KeyManager::CancelPendingTaps() {
+        _bindingGeneration.fetch_add(1, std::memory_order_relaxed);
+        {
+            std::lock_guard lock(_tapMutex);
+            _pendingTapSequences.clear();
+            ++_tapScheduleRevision;
+        }
+        _tapCondition.notify_all();
+    }
+
+    void KeyManager::RebuildTapPlans() {
+        CancelPendingTaps();
+        _tapPlans.clear();
+
+        for (const auto& binding : _bindings) {
+            const bool mainIsTap = binding.combo.mainActionType == ActionState::kTap;
+            const bool modifierIsTap = binding.combo.modifierActionType == ActionState::kTap;
+            if (!mainIsTap && !modifierIsTap) {
+                continue;
+            }
+
+            TapGroupKey groupKey;
+            int requiredTaps = 1;
+
+            // If both sides are taps, the main key remains the primary tap and
+            // the modifier tap becomes the anchor.
+            if (mainIsTap) {
+                groupKey.tapKey = binding.combo.mainKey;
+                requiredTaps = binding.combo.mainTapCount;
+                groupKey.anchorKey = binding.combo.modifierKey;
+                groupKey.anchorState = binding.combo.modifierKey != 0 ?
+                    binding.combo.modifierActionType :
+                    ActionState::kIgnored;
+                groupKey.anchorTapCount = binding.combo.modTapCount;
+            }
+            else {
+                groupKey.tapKey = binding.combo.modifierKey;
+                requiredTaps = binding.combo.modTapCount;
+                groupKey.anchorKey = binding.combo.mainKey;
+                groupKey.anchorState = binding.combo.mainActionType;
+                groupKey.anchorTapCount = binding.combo.mainTapCount;
+            }
+            if (groupKey.anchorState == ActionState::kIgnored) {
+                groupKey.anchorKey = 0;
+                groupKey.anchorTapCount = 1;
+            }
+            groupKey.tapBeforeHold =
+                groupKey.anchorState == ActionState::kHold &&
+                binding.combo.tapBeforeHold;
+            groupKey.isGamepad = binding.combo.isGamepad;
+
+            auto planIt = std::find_if(
+                _tapPlans.begin(),
+                _tapPlans.end(),
+                [&](const TapPlan& plan) {
+                    return plan.key == groupKey;
+                });
+            if (planIt == _tapPlans.end()) {
+                TapPlan plan;
+                plan.key = groupKey;
+                _tapPlans.push_back(std::move(plan));
+                planIt = std::prev(_tapPlans.end());
+            }
+
+            const int normalizedTaps = std::max(requiredTaps, 1);
+            const float normalizedWindow = std::max(binding.combo.tapWindow, 0.01f);
+            planIt->candidates.push_back({
+                binding.name,
+                normalizedTaps,
+                normalizedWindow,
+                std::max(binding.combo.holdDuration, 0.01f)
+            });
+            planIt->maximumTapCount =
+                std::max(planIt->maximumTapCount, normalizedTaps);
+            planIt->effectiveWindow =
+                std::max(planIt->effectiveWindow, normalizedWindow);
+        }
+
+        for (auto& plan : _tapPlans) {
+            std::stable_sort(
+                plan.candidates.begin(),
+                plan.candidates.end(),
+                [](const TapCandidate& left, const TapCandidate& right) {
+                    return left.requiredTaps < right.requiredTaps;
+                });
+        }
+    }
+
+    bool KeyManager::IsTapCandidateValid(
+        const PendingTapSequence& sequence,
+        const TapCandidate& candidate) const {
+
+        if (sequence.samples.size() !=
+            static_cast<std::size_t>(candidate.requiredTaps) ||
+            sequence.samples.empty() ||
+            sequence.tapPressInProgress) {
+            return false;
+        }
+
+        const TimePoint firstTapTime = sequence.samples.front().upTime;
+        const TimePoint lastTapTime = sequence.samples.back().upTime;
+        const float sequenceDuration = std::chrono::duration<float>(
+            lastTapTime - firstTapTime).count();
+        if (sequenceDuration > candidate.tapWindow) {
+            return false;
+        }
+
+        for (const auto& sample : sequence.samples) {
+            if (sample.pressDuration >= candidate.holdDuration) {
+                return false;
+            }
+        }
+
+        switch (sequence.plan.key.anchorState) {
+        case ActionState::kIgnored:
+            return true;
+
+        case ActionState::kPress: {
+            if (!sequence.anchorSatisfied) {
+                return false;
+            }
+            const TimePoint combinedStart = std::min(
+                firstTapTime,
+                sequence.anchorSatisfiedAt);
+            const TimePoint combinedEnd = std::max(
+                lastTapTime,
+                sequence.anchorSatisfiedAt);
+            return std::chrono::duration<float>(
+                combinedEnd - combinedStart).count() <=
+                candidate.tapWindow;
+        }
+
+        case ActionState::kHold:
+            if (sequence.plan.key.tapBeforeHold) {
+                if (!sequence.holdAnchorStarted ||
+                    sequence.holdAnchorDownAt < lastTapTime) {
+                    return false;
+                }
+                const float holdStartAfterTap =
+                    std::chrono::duration<float>(
+                        sequence.holdAnchorDownAt - lastTapTime).count();
+                const float activeHoldDuration =
+                    std::chrono::duration<float>(
+                        Clock::now() - sequence.holdAnchorDownAt).count();
+                return holdStartAfterTap <= candidate.tapWindow &&
+                    activeHoldDuration >= candidate.holdDuration;
+            }
+            for (const auto& sample : sequence.samples) {
+                if (!sample.anchorDown ||
+                    sample.anchorHeldDuration < candidate.holdDuration) {
+                    return false;
+                }
+            }
+            return true;
+
+        case ActionState::kTap: {
+            const auto earliestAnchorTime = lastTapTime -
+                std::chrono::duration_cast<Clock::duration>(
+                    std::chrono::duration<float>(candidate.tapWindow));
+            const auto latestAnchorTime = firstTapTime +
+                std::chrono::duration_cast<Clock::duration>(
+                    std::chrono::duration<float>(candidate.tapWindow));
+
+            std::vector<TimePoint> matchingAnchorTaps;
+            for (const auto tapTime : sequence.anchorTapTimes) {
+                if (tapTime >= earliestAnchorTime &&
+                    tapTime <= latestAnchorTime) {
+                    matchingAnchorTaps.push_back(tapTime);
+                }
+            }
+            if (matchingAnchorTaps.size() !=
+                static_cast<std::size_t>(
+                    std::max(sequence.plan.key.anchorTapCount, 1))) {
+                return false;
+            }
+
+            TimePoint combinedStart = firstTapTime;
+            TimePoint combinedEnd = lastTapTime;
+            for (const auto tapTime : matchingAnchorTaps) {
+                combinedStart = std::min(combinedStart, tapTime);
+                combinedEnd = std::max(combinedEnd, tapTime);
+            }
+            return std::chrono::duration<float>(
+                combinedEnd - combinedStart).count() <= candidate.tapWindow;
+        }
+
+        default:
+            return false;
+        }
+    }
+
+    std::optional<KeyManager::TapResolution>
+    KeyManager::FindTapResolutionLocked(
+        uint64_t burstID,
+        bool immediateOnly) const {
+
+        std::optional<TapResolution> bestResolution;
+        int bestSpecificity = -1;
+        int bestTapWeight = -1;
+
+        for (const auto& sequence : _pendingTapSequences) {
+            if (sequence.burstID != burstID) {
+                continue;
+            }
+
+            for (const auto& candidate : sequence.plan.candidates) {
+                if (!IsTapCandidateValid(sequence, candidate)) {
+                    continue;
+                }
+
+                if (immediateOnly) {
+                    if (sequence.samples.size() <
+                        static_cast<std::size_t>(
+                            sequence.plan.maximumTapCount)) {
+                        continue;
+                    }
+
+                    if (sequence.plan.key.anchorState ==
+                        ActionState::kIgnored) {
+                        const bool hasDeferredCombo = std::ranges::any_of(
+                            _pendingTapSequences,
+                            [&](const PendingTapSequence& other) {
+                                return other.burstID == burstID &&
+                                    (other.plan.key.anchorState ==
+                                         ActionState::kPress ||
+                                     other.plan.key.anchorState ==
+                                         ActionState::kTap ||
+                                     (other.plan.key.anchorState ==
+                                          ActionState::kHold &&
+                                      other.plan.key.tapBeforeHold));
+                            });
+                        const bool tapCanAnchorAnotherCombo =
+                            std::ranges::any_of(
+                                _tapPlans,
+                                [&](const TapPlan& plan) {
+                                    return plan.key.isGamepad ==
+                                            sequence.plan.key.isGamepad &&
+                                        plan.key.anchorState ==
+                                            ActionState::kTap &&
+                                        plan.key.anchorKey ==
+                                            sequence.plan.key.tapKey;
+                                });
+                        if (hasDeferredCombo ||
+                            tapCanAnchorAnotherCombo) {
+                            continue;
+                        }
+                    }
+
+                    if (sequence.plan.key.anchorState ==
+                        ActionState::kTap) {
+                        int maximumAnchorTaps =
+                            sequence.plan.key.anchorTapCount;
+                        for (const auto& other : _pendingTapSequences) {
+                            if (other.burstID == burstID &&
+                                other.plan.key.anchorState ==
+                                    ActionState::kTap &&
+                                other.plan.key.anchorKey ==
+                                    sequence.plan.key.anchorKey) {
+                                maximumAnchorTaps = std::max(
+                                    maximumAnchorTaps,
+                                    other.plan.key.anchorTapCount);
+                            }
+                        }
+                        if (sequence.plan.key.anchorTapCount <
+                            maximumAnchorTaps) {
+                            continue;
+                        }
+                    }
+                }
+
+                const int specificity =
+                    sequence.plan.key.anchorState ==
+                        ActionState::kIgnored ?
+                    0 : 1;
+                const int tapWeight = candidate.requiredTaps +
+                    (sequence.plan.key.anchorState == ActionState::kTap ?
+                         std::max(sequence.plan.key.anchorTapCount, 1) :
+                         0);
+                if (!bestResolution ||
+                    specificity > bestSpecificity ||
+                    (specificity == bestSpecificity &&
+                     tapWeight > bestTapWeight)) {
+                    bestSpecificity = specificity;
+                    bestTapWeight = tapWeight;
+                    bestResolution = TapResolution{
+                        candidate.bindingName,
+                        sequence.bindingGeneration,
+                        burstID,
+                        sequence.plan.key.tapKey,
+                        sequence.plan.key.anchorKey,
+                        sequence.plan.key.anchorState,
+                        sequence.plan.key.isGamepad
+                    };
+                }
+            }
+        }
+
+        return bestResolution;
+    }
+
+    void KeyManager::RemoveTapBurstLocked(
+        uint64_t burstID,
+        const std::optional<TapResolution>& resolution) {
+
+        _pendingTapSequences.erase(
+            std::remove_if(
+                _pendingTapSequences.begin(),
+                _pendingTapSequences.end(),
+                [&](const PendingTapSequence& sequence) {
+                    if (sequence.burstID == burstID) {
+                        return true;
+                    }
+                    return resolution &&
+                        resolution->anchorState == ActionState::kTap &&
+                        sequence.plan.key.isGamepad ==
+                            resolution->isGamepad &&
+                        sequence.plan.key.tapKey ==
+                            resolution->anchorKey;
+                }),
+            _pendingTapSequences.end());
+        ++_tapScheduleRevision;
+    }
+
+    void KeyManager::DispatchTapResolution(
+        const TapResolution& resolution,
+        bool alreadyOnGameThread) {
+
+        if (alreadyOnGameThread) {
+            CommitTapResolution(
+                resolution.bindingName,
+                resolution.bindingGeneration);
+            return;
+        }
+
+        if (const auto tasks = SKSE::GetTaskInterface()) {
+            const std::string bindingName = resolution.bindingName;
+            const uint64_t generation = resolution.bindingGeneration;
+            tasks->AddTask([this, bindingName, generation]() {
+                CommitTapResolution(bindingName, generation);
+            });
+        }
+    }
+
+    void KeyManager::CommitTapResolution(
+        const std::string& bindingName,
+        uint64_t bindingGeneration) {
+
+        if (bindingGeneration !=
+            _bindingGeneration.load(std::memory_order_relaxed)) {
+            return;
+        }
+
+        auto bindingIt = std::find_if(
+            _bindings.begin(),
+            _bindings.end(),
+            [&](const KeyBinding& binding) {
+                return binding.name == bindingName;
+            });
+        if (bindingIt == _bindings.end()) {
+            return;
+        }
+
+        auto& binding = *bindingIt;
+        ExecuteCallback(binding.name);
+
+        if (binding.combo.mainActionType == ActionState::kHold) {
+            _keyStates[binding.combo.mainKey].isHeldFired = true;
+        }
+        if (binding.combo.modifierActionType == ActionState::kHold) {
+            _keyStates[binding.combo.modifierKey].isHeldFired = true;
+        }
+        if (binding.combo.mainActionType == ActionState::kPress) {
+            _keyStates[binding.combo.mainKey].isPressFired = true;
+        }
+        if (binding.combo.modifierActionType == ActionState::kPress) {
+            _keyStates[binding.combo.modifierKey].isPressFired = true;
+        }
+
+        const bool needsRelease =
+            binding.combo.mainActionType == ActionState::kHold ||
+            binding.combo.modifierActionType == ActionState::kHold ||
+            binding.combo.mainActionType == ActionState::kPress ||
+            binding.combo.modifierActionType == ActionState::kPress;
+        if (!needsRelease) {
+            return;
+        }
+
+        uint32_t anchorKey = 0;
+        if (binding.combo.mainActionType == ActionState::kHold ||
+            binding.combo.mainActionType == ActionState::kPress) {
+            anchorKey = binding.combo.mainKey;
+        }
+        else if (binding.combo.modifierActionType == ActionState::kHold ||
+                 binding.combo.modifierActionType == ActionState::kPress) {
+            anchorKey = binding.combo.modifierKey;
+        }
+
+        if (anchorKey != 0 && _keyStates[anchorKey].isDown) {
+            binding.activeHold = true;
+        }
+        else {
+            ExecuteReleaseCallback(binding.name);
+        }
+    }
+
+    void KeyManager::TapSchedulerLoop(std::stop_token stopToken) {
+        while (!stopToken.stop_requested()) {
+            std::vector<TapResolution> resolutions;
+            std::unique_lock lock(_tapMutex);
+            const uint64_t observedRevision = _tapScheduleRevision;
+
+            if (_pendingTapSequences.empty()) {
+                _tapCondition.wait(lock, [&]() {
+                    return stopToken.stop_requested() ||
+                        _tapScheduleRevision != observedRevision ||
+                        !_pendingTapSequences.empty();
+                });
+            }
+            else {
+                const auto nextDeadline = std::ranges::min_element(
+                    _pendingTapSequences,
+                    {},
+                    &PendingTapSequence::deadline)->deadline;
+                _tapCondition.wait_until(lock, nextDeadline, [&]() {
+                    return stopToken.stop_requested() ||
+                        _tapScheduleRevision != observedRevision;
+                });
+            }
+
+            if (stopToken.stop_requested()) {
+                return;
+            }
+
+            const auto now = Clock::now();
+            std::vector<uint64_t> expiredBurstIDs;
+            for (const auto& sequence : _pendingTapSequences) {
+                if (sequence.deadline <= now &&
+                    std::find(
+                        expiredBurstIDs.begin(),
+                        expiredBurstIDs.end(),
+                        sequence.burstID) == expiredBurstIDs.end()) {
+                    expiredBurstIDs.push_back(sequence.burstID);
+                }
+            }
+
+            for (const uint64_t burstID : expiredBurstIDs) {
+                const auto resolution =
+                    FindTapResolutionLocked(burstID, false);
+                RemoveTapBurstLocked(burstID, resolution);
+                if (resolution) {
+                    resolutions.push_back(*resolution);
+                }
+            }
+            lock.unlock();
+
+            for (const auto& resolution : resolutions) {
+                DispatchTapResolution(resolution, false);
+            }
+        }
+    }
+
+    void KeyManager::HandleTapKeyDown(
+        uint32_t keyCode,
+        bool isGamepad,
+        TimePoint now) {
+
+        std::vector<TapResolution> resolutions;
+        {
+            std::lock_guard lock(_tapMutex);
+
+            std::vector<uint64_t> expiredBurstIDs;
+            for (const auto& sequence : _pendingTapSequences) {
+                if (sequence.deadline <= now &&
+                    std::find(
+                        expiredBurstIDs.begin(),
+                        expiredBurstIDs.end(),
+                        sequence.burstID) == expiredBurstIDs.end()) {
+                    expiredBurstIDs.push_back(sequence.burstID);
+                }
+            }
+            for (const uint64_t burstID : expiredBurstIDs) {
+                const auto resolution =
+                    FindTapResolutionLocked(burstID, false);
+                RemoveTapBurstLocked(burstID, resolution);
+                if (resolution) {
+                    resolutions.push_back(*resolution);
+                }
+            }
+
+            std::vector<uint64_t> affectedBurstIDs;
+            for (auto& sequence : _pendingTapSequences) {
+                if (sequence.deadline <= now ||
+                    sequence.plan.key.isGamepad != isGamepad) {
+                    continue;
+                }
+
+                if (sequence.plan.key.tapKey == keyCode) {
+                    sequence.tapPressInProgress = true;
+                }
+                if (sequence.plan.key.anchorState ==
+                        ActionState::kPress &&
+                    sequence.plan.key.anchorKey == keyCode &&
+                    !sequence.samples.empty()) {
+                    sequence.anchorSatisfied = true;
+                    sequence.anchorSatisfiedAt = now;
+                    if (std::find(
+                            affectedBurstIDs.begin(),
+                            affectedBurstIDs.end(),
+                            sequence.burstID) ==
+                        affectedBurstIDs.end()) {
+                        affectedBurstIDs.push_back(sequence.burstID);
+                    }
+                }
+                if (sequence.plan.key.anchorState ==
+                        ActionState::kHold &&
+                    sequence.plan.key.tapBeforeHold &&
+                    sequence.plan.key.anchorKey == keyCode &&
+                    !sequence.samples.empty() &&
+                    !sequence.holdAnchorStarted) {
+                    const auto lastTapTime =
+                        sequence.samples.back().upTime;
+                    const float holdStartAfterTap =
+                        std::chrono::duration<float>(
+                            now - lastTapTime).count();
+                    float requiredHoldDuration = 0.0f;
+                    bool hasExactCandidate = false;
+                    for (const auto& candidate :
+                         sequence.plan.candidates) {
+                        if (candidate.requiredTaps ==
+                            static_cast<int>(
+                                sequence.samples.size())) {
+                            requiredHoldDuration =
+                                hasExactCandidate ?
+                                std::min(
+                                    requiredHoldDuration,
+                                    candidate.holdDuration) :
+                                candidate.holdDuration;
+                            hasExactCandidate = true;
+                        }
+                    }
+                    if (hasExactCandidate &&
+                        holdStartAfterTap <=
+                            sequence.plan.effectiveWindow) {
+                        sequence.holdAnchorStarted = true;
+                        sequence.holdAnchorDownAt = now;
+                        const auto holdReadyAt = now +
+                            std::chrono::duration_cast<Clock::duration>(
+                                std::chrono::duration<float>(
+                                    requiredHoldDuration));
+                        for (auto& other : _pendingTapSequences) {
+                            if (other.burstID == sequence.burstID) {
+                                other.deadline = holdReadyAt;
+                            }
+                        }
+                        if (std::find(
+                                affectedBurstIDs.begin(),
+                                affectedBurstIDs.end(),
+                                sequence.burstID) ==
+                            affectedBurstIDs.end()) {
+                            affectedBurstIDs.push_back(
+                                sequence.burstID);
+                        }
+                    }
+                }
+            }
+
+            for (const uint64_t burstID : affectedBurstIDs) {
+                const auto resolution =
+                    FindTapResolutionLocked(burstID, true);
+                if (!resolution) {
+                    continue;
+                }
+                RemoveTapBurstLocked(burstID, resolution);
+                resolutions.push_back(*resolution);
+            }
+            ++_tapScheduleRevision;
+        }
+        _tapCondition.notify_all();
+
+        for (const auto& resolution : resolutions) {
+            DispatchTapResolution(resolution, true);
+        }
+    }
+
+    void KeyManager::HandleTapRelease(
+        uint32_t keyCode,
+        bool isGamepad,
+        float pressDuration,
+        TimePoint now) {
+
+        std::vector<const TapPlan*> matchingPlans;
+        float burstWindow = 0.0f;
+        for (const auto& plan : _tapPlans) {
+            const bool isPrimaryTap =
+                plan.key.tapKey == keyCode &&
+                plan.key.isGamepad == isGamepad;
+            const bool canStartTapTapCombo =
+                plan.key.anchorState == ActionState::kTap &&
+                plan.key.anchorKey == keyCode &&
+                plan.key.isGamepad == isGamepad;
+            if (isPrimaryTap) {
+                matchingPlans.push_back(&plan);
+            }
+            if (isPrimaryTap || canStartTapTapCombo) {
+                burstWindow = std::max(
+                    burstWindow,
+                    plan.effectiveWindow);
+            }
+        }
+
+        std::vector<TapResolution> resolutions;
+        {
+            std::lock_guard lock(_tapMutex);
+
+            std::vector<uint64_t> expiredBurstIDs;
+            for (const auto& sequence : _pendingTapSequences) {
+                if (sequence.deadline <= now &&
+                    std::find(
+                        expiredBurstIDs.begin(),
+                        expiredBurstIDs.end(),
+                        sequence.burstID) == expiredBurstIDs.end()) {
+                    expiredBurstIDs.push_back(sequence.burstID);
+                }
+            }
+            for (const uint64_t burstID : expiredBurstIDs) {
+                const auto resolution =
+                    FindTapResolutionLocked(burstID, false);
+                RemoveTapBurstLocked(burstID, resolution);
+                if (resolution) {
+                    resolutions.push_back(*resolution);
+                }
+            }
+
+            std::vector<uint64_t> affectedBurstIDs;
+            for (const auto& sequence : _pendingTapSequences) {
+                if (sequence.plan.key.isGamepad == isGamepad &&
+                    sequence.plan.key.anchorState ==
+                        ActionState::kHold &&
+                    sequence.plan.key.tapBeforeHold &&
+                    sequence.plan.key.anchorKey == keyCode &&
+                    sequence.holdAnchorStarted &&
+                    std::find(
+                        affectedBurstIDs.begin(),
+                        affectedBurstIDs.end(),
+                        sequence.burstID) == affectedBurstIDs.end()) {
+                    affectedBurstIDs.push_back(sequence.burstID);
+                }
+            }
+            _pendingTapSequences.erase(
+                std::remove_if(
+                    _pendingTapSequences.begin(),
+                    _pendingTapSequences.end(),
+                    [&](const PendingTapSequence& sequence) {
+                        return sequence.plan.key.isGamepad == isGamepad &&
+                            sequence.plan.key.anchorState ==
+                                ActionState::kHold &&
+                            sequence.plan.key.tapBeforeHold &&
+                            sequence.plan.key.anchorKey == keyCode &&
+                            sequence.holdAnchorStarted;
+                    }),
+                _pendingTapSequences.end());
+
+            for (auto& sequence : _pendingTapSequences) {
+                if (sequence.deadline > now &&
+                    sequence.plan.key.isGamepad == isGamepad &&
+                    sequence.plan.key.anchorState == ActionState::kTap &&
+                    sequence.plan.key.anchorKey == keyCode) {
+                    if (std::find(
+                            sequence.anchorTapTimes.begin(),
+                            sequence.anchorTapTimes.end(),
+                            now) == sequence.anchorTapTimes.end()) {
+                        sequence.anchorTapTimes.push_back(now);
+                    }
+                    if (std::find(
+                            affectedBurstIDs.begin(),
+                            affectedBurstIDs.end(),
+                            sequence.burstID) ==
+                        affectedBurstIDs.end()) {
+                        affectedBurstIDs.push_back(sequence.burstID);
+                    }
+                }
+            }
+
+            if (!matchingPlans.empty()) {
+                auto activeBurstIt = std::find_if(
+                    _pendingTapSequences.begin(),
+                    _pendingTapSequences.end(),
+                    [&](const PendingTapSequence& sequence) {
+                        return sequence.plan.key.tapKey == keyCode &&
+                            sequence.plan.key.isGamepad == isGamepad &&
+                            sequence.deadline > now;
+                    });
+
+                const uint64_t burstID =
+                    activeBurstIt != _pendingTapSequences.end() ?
+                    activeBurstIt->burstID : _nextTapBurstID++;
+                const auto deadline =
+                    activeBurstIt != _pendingTapSequences.end() ?
+                    activeBurstIt->deadline :
+                    now + std::chrono::duration_cast<Clock::duration>(
+                        std::chrono::duration<float>(
+                            std::max(burstWindow, 0.01f)));
+
+                for (const TapPlan* plan : matchingPlans) {
+                    auto sequenceIt = std::find_if(
+                        _pendingTapSequences.begin(),
+                        _pendingTapSequences.end(),
+                        [&](const PendingTapSequence& sequence) {
+                            return sequence.burstID == burstID &&
+                                sequence.plan.key == plan->key;
+                        });
+
+                    if (sequenceIt == _pendingTapSequences.end()) {
+                        PendingTapSequence sequence;
+                        sequence.burstID = burstID;
+                        sequence.plan = *plan;
+                        sequence.deadline = deadline;
+                        sequence.bindingGeneration =
+                            _bindingGeneration.load(
+                                std::memory_order_relaxed);
+
+                        const auto anchorIt =
+                            _keyStates.find(plan->key.anchorKey);
+                        if (anchorIt != _keyStates.end()) {
+                            const auto& anchor = anchorIt->second;
+                            if (plan->key.anchorState ==
+                                    ActionState::kPress &&
+                                anchor.isDown) {
+                                sequence.anchorSatisfied = true;
+                                sequence.anchorSatisfiedAt =
+                                    anchor.lastDownTime;
+                            }
+                            else if (plan->key.anchorState ==
+                                     ActionState::kTap) {
+                                for (const auto tapTime :
+                                     anchor.tapHistory) {
+                                    if (std::chrono::duration<float>(
+                                            now - tapTime).count() <=
+                                        plan->effectiveWindow) {
+                                        sequence.anchorTapTimes.push_back(
+                                            tapTime);
+                                    }
+                                }
+                            }
+                        }
+
+                        _pendingTapSequences.push_back(
+                            std::move(sequence));
+                        sequenceIt =
+                            std::prev(_pendingTapSequences.end());
+                    }
+                    TapSample sample;
+                    sample.upTime = now;
+                    sample.pressDuration = pressDuration;
+                    const auto anchorIt =
+                        _keyStates.find(plan->key.anchorKey);
+                    if (anchorIt != _keyStates.end()) {
+                        const auto& anchor = anchorIt->second;
+                        sample.anchorDown = anchor.isDown;
+                        if (anchor.isDown) {
+                            sample.anchorHeldDuration =
+                                std::chrono::duration<float>(
+                                    now - anchor.lastDownTime).count();
+                        }
+                        if (plan->key.anchorState ==
+                                ActionState::kPress &&
+                            anchor.isDown) {
+                            sequenceIt->anchorSatisfied = true;
+                            sequenceIt->anchorSatisfiedAt =
+                                anchor.lastDownTime;
+                        }
+                        else if (plan->key.anchorState ==
+                                 ActionState::kTap) {
+                            for (const auto tapTime :
+                                 anchor.tapHistory) {
+                                if (std::chrono::duration<float>(
+                                        now - tapTime).count() <=
+                                        plan->effectiveWindow &&
+                                    std::find(
+                                        sequenceIt->anchorTapTimes.begin(),
+                                        sequenceIt->anchorTapTimes.end(),
+                                        tapTime) ==
+                                        sequenceIt->anchorTapTimes.end()) {
+                                    sequenceIt->anchorTapTimes.push_back(
+                                        tapTime);
+                                }
+                            }
+                        }
+                    }
+                    sequenceIt->samples.push_back(sample);
+                    sequenceIt->tapPressInProgress = false;
+                }
+
+                float tapBeforeHoldWindow = 0.0f;
+                for (const auto& sequence : _pendingTapSequences) {
+                    if (sequence.burstID == burstID &&
+                        sequence.plan.key.anchorState ==
+                            ActionState::kHold &&
+                        sequence.plan.key.tapBeforeHold &&
+                        !sequence.holdAnchorStarted) {
+                        tapBeforeHoldWindow = std::max(
+                            tapBeforeHoldWindow,
+                            sequence.plan.effectiveWindow);
+                    }
+                }
+                if (tapBeforeHoldWindow > 0.0f) {
+                    const auto holdStartDeadline = now +
+                        std::chrono::duration_cast<Clock::duration>(
+                            std::chrono::duration<float>(
+                                tapBeforeHoldWindow));
+                    for (auto& sequence : _pendingTapSequences) {
+                        if (sequence.burstID == burstID) {
+                            sequence.deadline = std::max(
+                                sequence.deadline,
+                                holdStartDeadline);
+                        }
+                    }
+                }
+
+                for (const auto& sequence : _pendingTapSequences) {
+                    if (sequence.burstID == burstID &&
+                        sequence.plan.key.anchorState ==
+                            ActionState::kTap) {
+                        for (auto& other : _pendingTapSequences) {
+                            if (other.plan.key.isGamepad == isGamepad &&
+                                other.plan.key.tapKey ==
+                                    sequence.plan.key.anchorKey) {
+                                other.deadline = std::max(
+                                    other.deadline,
+                                    deadline);
+                            }
+                        }
+                    }
+                }
+
+                if (std::find(
+                        affectedBurstIDs.begin(),
+                        affectedBurstIDs.end(),
+                        burstID) == affectedBurstIDs.end()) {
+                    affectedBurstIDs.push_back(burstID);
+                }
+            }
+
+            for (const uint64_t burstID : affectedBurstIDs) {
+                const auto resolution =
+                    FindTapResolutionLocked(burstID, true);
+                if (!resolution) {
+                    continue;
+                }
+                RemoveTapBurstLocked(burstID, resolution);
+                resolutions.push_back(*resolution);
+            }
+            ++_tapScheduleRevision;
+        }
+        _tapCondition.notify_all();
+
+        for (const auto& resolution : resolutions) {
+            DispatchTapResolution(resolution, true);
+        }
     }
 
     bool KeyManager::ProcessCoreLogic(RE::InputEvent* a_event) {
@@ -227,6 +1100,8 @@ namespace PluginLogic {
                 uint32_t id = GetUnifiedKeyCode(buttonEvent);
                 auto& state = _keyStates[id];
                 bool isBusy = _isRecordingMotion || (_testingMotionIndex >= 0);
+                bool completedRelease = false;
+                float releasedPressDuration = 0.0f;
                 if (isBusy) {
                     if (buttonEvent->IsDown()) state.isDown = true;
                     else if (buttonEvent->IsUp()) state.isDown = false;
@@ -238,6 +1113,11 @@ namespace PluginLogic {
                         state.isPressFired = false;
                     }
                     state.isDown = true;
+                    HandleTapKeyDown(
+                        id,
+                        buttonEvent->GetDevice() ==
+                            RE::INPUT_DEVICE::kGamepad,
+                        now);
 
                     for (const auto& binding : _bindings) {
                         if (binding.combo.modifierActionType == ActionState::kGesture && binding.combo.mainKey == id) {
@@ -257,6 +1137,10 @@ namespace PluginLogic {
                 }
                 else if (buttonEvent->IsUp()) {
                     if (state.isDown) {
+                        releasedPressDuration =
+                            std::chrono::duration<float>(
+                                now - state.lastDownTime).count();
+                        completedRelease = true;
                         for (auto& binding : _bindings) {
                             if (binding.activeHold) {
                                 bool mainReleased = (binding.combo.mainKey == id && (binding.combo.mainActionType == ActionState::kHold || binding.combo.mainActionType == ActionState::kPress));
@@ -312,12 +1196,25 @@ namespace PluginLogic {
                     }
                 }
 
+                if (completedRelease) {
+                    HandleTapRelease(
+                        id,
+                        buttonEvent->GetDevice() ==
+                            RE::INPUT_DEVICE::kGamepad,
+                        releasedPressDuration,
+                        now);
+                }
+
                 // -------------------------------------------------------------------
                 // AVALIAÇÃO DINÂMICA DE TODAS AS AÇÕES REGISTADAS
                 // -------------------------------------------------------------------
                 for (auto& binding : _bindings) {
 
                     if (binding.combo.modifierActionType == ActionState::kGesture) continue;
+                    if (binding.combo.mainActionType == ActionState::kTap ||
+                        binding.combo.modifierActionType == ActionState::kTap) {
+                        continue;
+                    }
 
                     if (binding.combo.mainKey == id || binding.combo.modifierKey == id) {
 
@@ -342,9 +1239,6 @@ namespace PluginLogic {
                         if (IsConditionMet(binding.combo.mainKey, binding.combo.mainActionType, binding.combo.mainTapCount, now, binding.combo.tapWindow, binding.combo.holdDuration, mainIsAnchor) &&
                             IsConditionMet(binding.combo.modifierKey, binding.combo.modifierActionType, binding.combo.modTapCount, now, binding.combo.tapWindow, binding.combo.holdDuration, modIsAnchor)) {
 
-                            bool isMainTap = (binding.combo.mainActionType == ActionState::kTap);
-                            bool isModTap = (binding.combo.modifierActionType == ActionState::kTap);
-
                             if (binding.combo.mainActionType == ActionState::kHold) _keyStates[binding.combo.mainKey].isHeldFired = true;
                             if (binding.combo.modifierActionType == ActionState::kHold) _keyStates[binding.combo.modifierKey].isHeldFired = true;
                             if (binding.combo.mainActionType == ActionState::kPress) _keyStates[binding.combo.mainKey].isPressFired = true;
@@ -355,70 +1249,11 @@ namespace PluginLogic {
 
                             consumed = true;
 
-                            if ((isMainTap || isModTap) && binding.combo.needsDelay) {
+                            ExecuteCallback(binding.name);
 
-                                std::string actionName = binding.name;
-                                uint32_t tapKey = isMainTap ? binding.combo.mainKey : binding.combo.modifierKey;
-                                int requiredTaps = isMainTap ? binding.combo.mainTapCount : binding.combo.modTapCount;
-                                float waitTime = binding.combo.tapWindow;
-
-                                std::thread([this, actionName, tapKey, requiredTaps, waitTime]() {
-                                    std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(waitTime * 1000)));
-
-                                    auto nowWake = std::chrono::steady_clock::now();
-                                    int validTaps = 0;
-
-                                    for (auto it = _keyStates[tapKey].tapHistory.rbegin(); it != _keyStates[tapKey].tapHistory.rend(); ++it) {
-                                        if (std::chrono::duration<float>(nowWake - *it).count() <= (waitTime * 1.5f)) {
-                                            validTaps++;
-                                        }
-                                        else {
-                                            break;
-                                        }
-                                    }
-
-                                    if (validTaps == requiredTaps && !_keyStates[tapKey].isDown) {
-                                        SKSE::GetTaskInterface()->AddTask([this, actionName, tapKey]() {
-                                            ExecuteCallback(actionName);
-
-                                            for (auto& b : _bindings) {
-                                                if (b.name == actionName) {
-                                                    bool needsRelease = (b.combo.mainActionType == ActionState::kHold || b.combo.modifierActionType == ActionState::kHold ||
-                                                        b.combo.mainActionType == ActionState::kPress || b.combo.modifierActionType == ActionState::kPress);
-                                                    if (needsRelease) {
-                                                        bool anchorIsDown = false;
-                                                        if (b.combo.mainActionType == ActionState::kHold || b.combo.mainActionType == ActionState::kPress) {
-                                                            anchorIsDown = _keyStates[b.combo.mainKey].isDown;
-                                                        }
-                                                        else {
-                                                            anchorIsDown = _keyStates[b.combo.modifierKey].isDown;
-                                                        }
-
-                                                        if (anchorIsDown) {
-                                                            b.activeHold = true;
-                                                        }
-                                                        else {
-                                                            ExecuteReleaseCallback(actionName);
-                                                        }
-                                                    }
-                                                    break;
-                                                }
-                                            }
-                                            _keyStates[tapKey].tapHistory.clear();
-                                            });
-                                    }
-                                    }).detach();
-                            }
-                            else {
-                                ExecuteCallback(binding.name);
-
-                                if (binding.combo.mainActionType == ActionState::kHold || binding.combo.modifierActionType == ActionState::kHold ||
-                                    binding.combo.mainActionType == ActionState::kPress || binding.combo.modifierActionType == ActionState::kPress) {
-                                    binding.activeHold = true;
-                                }
-
-                                if (binding.combo.mainActionType == ActionState::kTap) _keyStates[binding.combo.mainKey].tapHistory.clear();
-                                if (binding.combo.modifierActionType == ActionState::kTap) _keyStates[binding.combo.modifierKey].tapHistory.clear();
+                            if (binding.combo.mainActionType == ActionState::kHold || binding.combo.modifierActionType == ActionState::kHold ||
+                                binding.combo.mainActionType == ActionState::kPress || binding.combo.modifierActionType == ActionState::kPress) {
+                                binding.activeHold = true;
                             }
                         }
                     }
@@ -454,11 +1289,14 @@ namespace PluginLogic {
 
     void KeyManager::ClearStates() {
         //logger::info("[KeyManager] Limpando todos os estados de teclas.");
+        CancelPendingTaps();
         _keyStates.clear();
     }
 
     void KeyManager::ClearBindings() {
         //logger::info("[KeyManager] Limpando todos os bindings e estados registrados.");
+        CancelPendingTaps();
+        _tapPlans.clear();
         _bindings.clear();
         _keyStates.clear();
     }
@@ -469,6 +1307,7 @@ namespace PluginLogic {
             bool bHasMod = (b.combo.modifierKey != 0);
             return aHasMod > bHasMod; // true (1) vem antes de false (0)
             });
+        RebuildTapPlans();
         //logger::info("[KeyManager] Bindings ordenados: Combos tem prioridade sobre Teclas Isoladas.");
     }
 
@@ -762,6 +1601,8 @@ namespace PluginLogic {
     }
 
     void KeyManager::ResetAllInputs() {
+        CancelPendingTaps();
+
         // 1. Dispara o Release Callback para todas as ações que ficaram ativas (Hold/Press)
         for (auto& binding : _bindings) {
             if (binding.activeHold) {

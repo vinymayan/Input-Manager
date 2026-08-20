@@ -3,8 +3,12 @@
 namespace InputManagerAPI {
 
     constexpr const char* PluginName = "InputManager";
+    constexpr uint32_t kAPIVersion1 = 1;
+    constexpr uint32_t kAPIVersion2 = 2;
     constexpr uint32_t kMessage_RequestAPI = 8085;
     constexpr uint32_t kMessage_ProvideAPI = 8086;
+    constexpr uint32_t kMessage_RequestAPIV2 = 8087;
+    constexpr uint32_t kMessage_ProvideAPIV2 = 8088;
     constexpr uint32_t VKEY_DIR_UP = 5000;
     constexpr uint32_t VKEY_DIR_DOWN = 5001;
     constexpr uint32_t VKEY_DIR_LEFT = 5002;
@@ -47,6 +51,29 @@ namespace InputManagerAPI {
         bool isValid;
     };
 
+    enum class ActionUpdateCode : uint32_t {
+        kSuccess = 0,
+        kInvalidActionID,
+        kInvalidMapping,
+        kInvalidPCGesture,
+        kInvalidGamepadGesture,
+        kNameConflict,
+        kPCMappingConflict,
+        kGamepadMappingConflict,
+        kPersistenceFailure,
+        kInternalError
+    };
+
+    struct ActionUpdateResultV2 {
+        uint32_t structSize = sizeof(ActionUpdateResultV2);
+        uint32_t success = 0;  // 0 = failure, 1 = success
+        ActionUpdateCode code = ActionUpdateCode::kInternalError;
+        int32_t requestedActionID = -1;
+        int32_t conflictingActionID = -1;
+        char message[192]{};
+    };
+    static_assert(sizeof(ActionUpdateResultV2) == 212);
+
     class IInputManager {
     public:
         virtual ~IInputManager() = default;
@@ -72,7 +99,18 @@ namespace InputManagerAPI {
         virtual bool UpdateMotionMapping(int motionID, const MotionInfo& newMapping) = 0;
     };
 
+    // V1 permanece congelada para compatibilidade binaria. Novas funcoes entram
+    // somente em interfaces derivadas e sao solicitadas explicitamente.
+    class IInputManagerV2 : public IInputManager {
+    public:
+        virtual uint32_t GetAPIVersion() const = 0;
+        virtual ActionUpdateResultV2 UpdateActionMappingV2(
+            int actionID,
+            const ActionInfo& newMapping) = 0;
+    };
+
     inline IInputManager* _API = nullptr;
+    inline IInputManagerV2* _APIV2 = nullptr;
 
     // ====================================================================
     // MÉTODO 1: SKSE MESSAGING (Assíncrono)
@@ -88,6 +126,17 @@ namespace InputManagerAPI {
         if (message->type == kMessage_ProvideAPI && message->data) {
             _API = static_cast<IInputManager*>(message->data);
         }
+        else if (message->type == kMessage_ProvideAPIV2 && message->data) {
+            _APIV2 = static_cast<IInputManagerV2*>(message->data);
+            _API = _APIV2;
+        }
+    }
+
+    inline void RequestAPIV2() {
+        auto messaging = SKSE::GetMessagingInterface();
+        if (messaging) {
+            messaging->Dispatch(kMessage_RequestAPIV2, nullptr, 0, nullptr);
+        }
     }
 
     // ====================================================================
@@ -102,6 +151,25 @@ namespace InputManagerAPI {
             if (getApiFunc) {
                 _API = static_cast<IInputManager*>(getApiFunc());
                 return _API;
+            }
+        }
+        return nullptr;
+    }
+
+    inline IInputManagerV2* RequestAPIDirectV2() {
+        HMODULE handle = GetModuleHandleW(L"InputManager.dll");
+        if (handle) {
+            auto getApiFunc =
+                (void* (*)(uint32_t))GetProcAddress(
+                    handle,
+                    "GetInputManagerAPIEx");
+            if (getApiFunc) {
+                _APIV2 = static_cast<IInputManagerV2*>(
+                    getApiFunc(kAPIVersion2));
+                if (_APIV2) {
+                    _API = _APIV2;
+                }
+                return _APIV2;
             }
         }
         return nullptr;

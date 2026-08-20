@@ -245,24 +245,29 @@ namespace ActionMenuUI {
 
     inline std::vector<MovementEntry> movementList;
 
+    enum class TapHoldOrder : int {
+        kHoldThenTap = 0,
+        kTapThenHold = 1
+    };
+
     struct ActionEntry {
         char name[64] = "New Action";
 
         int pcMainKey = 0;
         int pcMainAction = 1;
         int pcMainTapCount = 1;
-        bool pcDelayTap = false;
         int pcModifierKey = 0;
         int pcModAction = 0;
         int pcModTapCount = 1;
+        int pcTapHoldOrder = static_cast<int>(TapHoldOrder::kHoldThenTap);
 
         int gamepadMainKey = 0;
         int gamepadMainAction = 1;
         int gamepadMainTapCount = 1;
-        bool gamepadDelayTap = false;
         int gamepadModifierKey = 0;
         int gamepadModAction = 0;
         int gamepadModTapCount = 1;
+        int gamepadTapHoldOrder = static_cast<int>(TapHoldOrder::kHoldThenTap);
 
         int gamepadGestureStick = 0;
 
@@ -270,9 +275,314 @@ namespace ActionMenuUI {
         float holdDuration = 0.3f;
         float tapWindow = 0.35f;
         int gestureIndex = -1;
+        uint64_t editorUID = 0;
     };
 
     inline std::vector<ActionEntry> actionList;
+    inline std::vector<ActionEntry> savedActionList;
+    inline float savedGlobalTapWindow = globalTapWindow;
+    inline float savedGlobalHoldDuration = globalHoldDuration;
+    inline bool savedAdvancedMode = advancedMode;
+    inline bool savedActionListReady = false;
+    inline bool savedActionSettingsReady = false;
+    inline uint64_t nextActionEditorUID = 1;
+
+    inline void EnsureActionEditorUIDs() {
+        for (auto& action : actionList) {
+            if (action.editorUID == 0) {
+                action.editorUID = nextActionEditorUID++;
+            }
+        }
+    }
+
+    inline bool AreActionsEqual(const ActionEntry& left, const ActionEntry& right) {
+        return std::strcmp(left.name, right.name) == 0 &&
+            left.pcMainKey == right.pcMainKey &&
+            left.pcMainAction == right.pcMainAction &&
+            left.pcMainTapCount == right.pcMainTapCount &&
+            left.pcModifierKey == right.pcModifierKey &&
+            left.pcModAction == right.pcModAction &&
+            left.pcModTapCount == right.pcModTapCount &&
+            left.pcTapHoldOrder == right.pcTapHoldOrder &&
+            left.gamepadMainKey == right.gamepadMainKey &&
+            left.gamepadMainAction == right.gamepadMainAction &&
+            left.gamepadMainTapCount == right.gamepadMainTapCount &&
+            left.gamepadModifierKey == right.gamepadModifierKey &&
+            left.gamepadModAction == right.gamepadModAction &&
+            left.gamepadModTapCount == right.gamepadModTapCount &&
+            left.gamepadTapHoldOrder == right.gamepadTapHoldOrder &&
+            left.gamepadGestureStick == right.gamepadGestureStick &&
+            left.useCustomTimings == right.useCustomTimings &&
+            left.holdDuration == right.holdDuration &&
+            left.tapWindow == right.tapWindow &&
+            left.gestureIndex == right.gestureIndex;
+    }
+
+    inline void CaptureSavedActionList() {
+        EnsureActionEditorUIDs();
+        savedActionList = actionList;
+        savedActionListReady = true;
+    }
+
+    inline void CaptureSavedActionSettings() {
+        savedGlobalTapWindow = globalTapWindow;
+        savedGlobalHoldDuration = globalHoldDuration;
+        savedAdvancedMode = advancedMode;
+        savedActionSettingsReady = true;
+    }
+
+    inline bool HasUnsavedActionChanges() {
+        if (!savedActionListReady || !savedActionSettingsReady) {
+            return false;
+        }
+        if (globalTapWindow != savedGlobalTapWindow ||
+            globalHoldDuration != savedGlobalHoldDuration ||
+            advancedMode != savedAdvancedMode ||
+            actionList.size() != savedActionList.size()) {
+            return true;
+        }
+        for (std::size_t i = 0; i < actionList.size(); ++i) {
+            if (!AreActionsEqual(actionList[i], savedActionList[i])) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    inline bool IsActionDirty(std::size_t actionIndex) {
+        if (!savedActionListReady || actionIndex >= actionList.size()) {
+            return false;
+        }
+        EnsureActionEditorUIDs();
+        const auto& action = actionList[actionIndex];
+        const auto savedIt = std::find_if(
+            savedActionList.begin(),
+            savedActionList.end(),
+            [&](const ActionEntry& saved) {
+                return saved.editorUID == action.editorUID;
+            });
+        if (savedIt == savedActionList.end()) {
+            return true;
+        }
+        const auto savedIndex = static_cast<std::size_t>(
+            std::distance(savedActionList.begin(), savedIt));
+        return savedIndex != actionIndex ||
+            !AreActionsEqual(action, *savedIt);
+    }
+
+    inline bool IsTapHoldPair(int mainAction, int modifierAction) {
+        return (mainAction == 1 && modifierAction == 2) ||
+            (mainAction == 2 && modifierAction == 1);
+    }
+
+    struct TapSignature {
+        int tapKey = 0;
+        int tapCount = 0;
+        int anchorKey = 0;
+        int anchorAction = 0;
+        int anchorTapCount = 1;
+        int tapHoldOrder = 0;
+    };
+
+    inline TapSignature GetTapSignature(
+        const ActionEntry& action,
+        bool gamepad) {
+
+        const int mainKey = gamepad ?
+            action.gamepadMainKey : action.pcMainKey;
+        const int mainAction = gamepad ?
+            action.gamepadMainAction : action.pcMainAction;
+        const int mainTaps = gamepad ?
+            action.gamepadMainTapCount : action.pcMainTapCount;
+        const int modifierKey = gamepad ?
+            action.gamepadModifierKey : action.pcModifierKey;
+        const int modifierAction = gamepad ?
+            action.gamepadModAction : action.pcModAction;
+        const int modifierTaps = gamepad ?
+            action.gamepadModTapCount : action.pcModTapCount;
+        const int order = gamepad ?
+            action.gamepadTapHoldOrder : action.pcTapHoldOrder;
+
+        if (mainAction == 1) {
+            return {
+                mainKey,
+                std::max(mainTaps, 1),
+                modifierKey,
+                modifierAction,
+                std::max(modifierTaps, 1),
+                order
+            };
+        }
+        if (modifierAction == 1) {
+            return {
+                modifierKey,
+                std::max(modifierTaps, 1),
+                mainKey,
+                mainAction,
+                std::max(mainTaps, 1),
+                order
+            };
+        }
+        return {};
+    }
+
+    inline bool HasHigherTapAlternative(
+        std::size_t actionIndex,
+        bool gamepad) {
+
+        if (actionIndex >= actionList.size()) {
+            return false;
+        }
+        const auto signature =
+            GetTapSignature(actionList[actionIndex], gamepad);
+        if (signature.tapKey == 0) {
+            return false;
+        }
+
+        for (std::size_t i = 0; i < actionList.size(); ++i) {
+            if (i == actionIndex) {
+                continue;
+            }
+            const auto other = GetTapSignature(actionList[i], gamepad);
+            if (other.tapKey == signature.tapKey &&
+                other.anchorKey == signature.anchorKey &&
+                other.anchorAction == signature.anchorAction &&
+                (signature.anchorAction != 1 ||
+                 other.anchorTapCount == signature.anchorTapCount) &&
+                (signature.anchorAction != 2 ||
+                 other.tapHoldOrder == signature.tapHoldOrder) &&
+                other.tapCount > signature.tapCount) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    inline void RenderTapHoldOrderSelector(
+        int& order,
+        const char* widgetID) {
+
+        order = std::clamp(order, 0, 1);
+        const char* preview = order ==
+            static_cast<int>(TapHoldOrder::kTapThenHold) ?
+            GetLoc("action.order_tap_hold", "Tap -> Hold") :
+            GetLoc("action.order_hold_tap", "Hold -> Tap");
+        ImGuiMCP::TextDisabled("%s", GetLoc(
+            "action.execution_order", "Execution Order"));
+        ImGuiMCP::SetNextItemWidth(180.0f);
+        if (ImGuiMCP::BeginCombo(widgetID, preview)) {
+            if (ImGuiMCP::Selectable(
+                    GetLoc("action.order_hold_tap", "Hold -> Tap"),
+                    order == static_cast<int>(
+                        TapHoldOrder::kHoldThenTap))) {
+                order = static_cast<int>(TapHoldOrder::kHoldThenTap);
+            }
+            if (ImGuiMCP::Selectable(
+                    GetLoc("action.order_tap_hold", "Tap -> Hold"),
+                    order == static_cast<int>(
+                        TapHoldOrder::kTapThenHold))) {
+                order = static_cast<int>(TapHoldOrder::kTapThenHold);
+            }
+            ImGuiMCP::EndCombo();
+        }
+    }
+
+    inline void RenderInputBehaviorNotices(
+        const ActionEntry& action,
+        std::size_t actionIndex,
+        bool gamepad) {
+
+        const int mainAction = gamepad ?
+            action.gamepadMainAction : action.pcMainAction;
+        const int modifierAction = gamepad ?
+            action.gamepadModAction : action.pcModAction;
+        const int modifierKey = gamepad ?
+            action.gamepadModifierKey : action.pcModifierKey;
+        const int order = gamepad ?
+            action.gamepadTapHoldOrder : action.pcTapHoldOrder;
+        const float tapWindow = action.useCustomTimings ?
+            action.tapWindow : globalTapWindow;
+        const float holdDuration = action.useCustomTimings ?
+            action.holdDuration : globalHoldDuration;
+
+        std::vector<std::pair<bool, std::string>> notices;
+        char buffer[512];
+        if (modifierKey != 0 &&
+            IsTapHoldPair(mainAction, modifierAction)) {
+            if (order == static_cast<int>(
+                    TapHoldOrder::kTapThenHold)) {
+                snprintf(
+                    buffer,
+                    sizeof(buffer),
+                    GetLoc(
+                        "action.behavior_tap_hold",
+                        "Tap -> Hold: complete the exact taps, start Hold within %.2fs, then keep it for %.2fs."),
+                    tapWindow,
+                    holdDuration);
+            }
+            else {
+                snprintf(
+                    buffer,
+                    sizeof(buffer),
+                    GetLoc(
+                        "action.behavior_hold_tap",
+                        "Hold -> Tap: keep Hold active for %.2fs before completing the exact taps. Release follows Hold."),
+                    holdDuration);
+            }
+            notices.emplace_back(false, buffer);
+        }
+        else if (modifierKey != 0 &&
+            ((mainAction == 1 && modifierAction == 4) ||
+             (mainAction == 4 && modifierAction == 1))) {
+            notices.emplace_back(
+                false,
+                GetLoc(
+                    "action.behavior_tap_press",
+                    "Tap + Press accepts either order within the tap window. Press controls the release."));
+        }
+        else if (modifierKey != 0 &&
+            mainAction == 1 && modifierAction == 1) {
+            notices.emplace_back(
+                false,
+                GetLoc(
+                    "action.behavior_tap_tap",
+                    "Tap + Tap accepts either order and requires the exact tap count on both keys."));
+        }
+
+        if (modifierAction == 3) {
+            notices.emplace_back(
+                false,
+                gamepad ?
+                    GetLoc(
+                        "action.behavior_gesture_pad",
+                        "Gesture: hold the main input and draw with the selected thumbstick.") :
+                    GetLoc(
+                        "action.behavior_gesture_pc",
+                        "Gesture: hold the main input while drawing the configured movement."));
+        }
+        if (HasHigherTapAlternative(actionIndex, gamepad)) {
+            notices.emplace_back(
+                true,
+                GetLoc(
+                    "action.behavior_tap_wait",
+                    "This tap waits only while a higher tap count can still complete."));
+        }
+
+        for (const auto& [warning, text] : notices) {
+            ImGuiMCP::Spacing();
+            if (warning) {
+                ImGuiMCP::TextColored(
+                    { 1.0f, 0.8f, 0.2f, 1.0f }, "%s", "!");
+            }
+            else {
+                ImGuiMCP::TextColored(
+                    { 0.45f, 0.75f, 1.0f, 1.0f }, "%s", "i");
+            }
+            ImGuiMCP::SameLine();
+            ImGuiMCP::TextWrapped("%s", text.c_str());
+        }
+    }
+
     inline const char* GetStateName(int state) {
         switch (state) {
         case 0: return GetLoc("state.ignore", "Ignore");
@@ -424,16 +734,19 @@ namespace ActionMenuUI {
                 pcCombo.mainKey = entry.pcMainKey;
                 pcCombo.mainActionType = static_cast<PluginLogic::ActionState>(entry.pcMainAction);
                 pcCombo.mainTapCount = entry.pcMainTapCount;
-                pcCombo.needsDelay = entry.pcDelayTap;
                 pcCombo.modifierKey = entry.pcModifierKey;
                 pcCombo.modifierActionType = entry.pcModifierKey != 0 || entry.pcModAction == 3 ?
                     static_cast<PluginLogic::ActionState>(entry.pcModAction) : PluginLogic::ActionState::kIgnored;
                 pcCombo.modTapCount = entry.pcModTapCount;
+                pcCombo.tapBeforeHold =
+                    entry.pcTapHoldOrder ==
+                    static_cast<int>(TapHoldOrder::kTapThenHold);
 
                 pcCombo.useCustomTimings = entry.useCustomTimings;
                 pcCombo.holdDuration = entry.useCustomTimings ? entry.holdDuration : globalHoldDuration;
                 pcCombo.tapWindow = entry.useCustomTimings ? entry.tapWindow : globalTapWindow;
                 pcCombo.gestureIndex = entry.gestureIndex;
+                pcCombo.isGamepad = false;
 
                 keyManager->RegisterAction(std::to_string(i) + "_PC", pcCombo,
                     createCallback(static_cast<int>(i), entry.name, "PC"),
@@ -445,17 +758,20 @@ namespace ActionMenuUI {
                 padCombo.mainKey = entry.gamepadMainKey;
                 padCombo.mainActionType = static_cast<PluginLogic::ActionState>(entry.gamepadMainAction);
                 padCombo.mainTapCount = entry.gamepadMainTapCount;
-                padCombo.needsDelay = entry.gamepadDelayTap;
                 padCombo.modifierKey = entry.gamepadModifierKey;
                 padCombo.modifierActionType = entry.gamepadModifierKey != 0 || entry.gamepadModAction == 3 ?
                     static_cast<PluginLogic::ActionState>(entry.gamepadModAction) : PluginLogic::ActionState::kIgnored;
                 padCombo.modTapCount = entry.gamepadModTapCount;
+                padCombo.tapBeforeHold =
+                    entry.gamepadTapHoldOrder ==
+                    static_cast<int>(TapHoldOrder::kTapThenHold);
 
                 padCombo.useCustomTimings = entry.useCustomTimings;
                 padCombo.holdDuration = entry.useCustomTimings ? entry.holdDuration : globalHoldDuration;
                 padCombo.tapWindow = entry.useCustomTimings ? entry.tapWindow : globalTapWindow;
                 padCombo.gestureIndex = entry.gestureIndex;
                 padCombo.gamepadGestureStick = entry.gamepadGestureStick;
+                padCombo.isGamepad = true;
 
                 keyManager->RegisterAction(std::to_string(i) + "_PAD", padCombo,
                     createCallback(static_cast<int>(i), entry.name, "Gamepad"),
@@ -506,6 +822,7 @@ namespace ActionMenuUI {
             if (doc.HasMember("mappingPad_Down")) mappingPad_Down = doc["mappingPad_Down"].GetInt();
             if (doc.HasMember("mappingPad_Left")) mappingPad_Left = doc["mappingPad_Left"].GetInt();
             if (doc.HasMember("mappingPad_Right")) mappingPad_Right = doc["mappingPad_Right"].GetInt();
+            CaptureSavedActionSettings();
         }
         catch (...) {}
     }
@@ -548,6 +865,7 @@ namespace ActionMenuUI {
             rapidjson::OStreamWrapper osw(ofs);
             rapidjson::PrettyWriter<rapidjson::OStreamWrapper> writer(osw);
             doc.Accept(writer);
+            CaptureSavedActionSettings();
         }
         catch (...) {}
     }
@@ -639,7 +957,10 @@ namespace ActionMenuUI {
             if (item.HasMember("pcModifierKey")) entry.pcModifierKey = item["pcModifierKey"].GetInt();
             if (item.HasMember("pcModAction")) entry.pcModAction = item["pcModAction"].GetInt();
             if (item.HasMember("pcModTapCount")) entry.pcModTapCount = item["pcModTapCount"].GetInt();
-            if (item.HasMember("pcDelayTap") && item["pcDelayTap"].IsBool()) entry.pcDelayTap = item["pcDelayTap"].GetBool();
+            if (item.HasMember("pcTapHoldOrder") && item["pcTapHoldOrder"].IsInt()) {
+                entry.pcTapHoldOrder = std::clamp(
+                    item["pcTapHoldOrder"].GetInt(), 0, 1);
+            }
 
             if (item.HasMember("gamepadMainKey")) entry.gamepadMainKey = item["gamepadMainKey"].GetInt();
             if (item.HasMember("gamepadMainAction")) entry.gamepadMainAction = item["gamepadMainAction"].GetInt();
@@ -647,7 +968,10 @@ namespace ActionMenuUI {
             if (item.HasMember("gamepadModifierKey")) entry.gamepadModifierKey = item["gamepadModifierKey"].GetInt();
             if (item.HasMember("gamepadModAction")) entry.gamepadModAction = item["gamepadModAction"].GetInt();
             if (item.HasMember("gamepadModTapCount")) entry.gamepadModTapCount = item["gamepadModTapCount"].GetInt();
-            if (item.HasMember("gamepadDelayTap") && item["gamepadDelayTap"].IsBool()) entry.gamepadDelayTap = item["gamepadDelayTap"].GetBool();
+            if (item.HasMember("gamepadTapHoldOrder") && item["gamepadTapHoldOrder"].IsInt()) {
+                entry.gamepadTapHoldOrder = std::clamp(
+                    item["gamepadTapHoldOrder"].GetInt(), 0, 1);
+            }
 
             if (item.HasMember("gestureIndex")) entry.gestureIndex = item["gestureIndex"].GetInt();
             if (item.HasMember("gamepadGestureStick")) entry.gamepadGestureStick = item["gamepadGestureStick"].GetInt();
@@ -678,15 +1002,16 @@ namespace ActionMenuUI {
         std::sort(tempLoaded.begin(), tempLoaded.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
         for (const auto& pair : tempLoaded) actionList.push_back(pair.second);
         SyncActionsWithEngine();
+        CaptureSavedActionList();
     }
 
-    inline void SaveActionsToJson() {
+    inline bool SaveActionsToJson() {
         try {
             std::error_code ec;
             fs::create_directories(INPUTS_DIR, ec);
             if (ec) {
                 logger::error("[Input Manager] Error creating Inputs directory: {}", ec.message());
-                return;
+                return false;
             }
             std::vector<std::string> uniqueFiles;
             for (const auto& action : actionList) {
@@ -719,7 +1044,7 @@ namespace ActionMenuUI {
                         actionObj.AddMember("pcModifierKey", action.pcModifierKey, allocator);
                         actionObj.AddMember("pcModAction", action.pcModAction, allocator);
                         actionObj.AddMember("pcModTapCount", action.pcModTapCount, allocator);
-                        actionObj.AddMember("pcDelayTap", action.pcDelayTap, allocator);
+                        actionObj.AddMember("pcTapHoldOrder", action.pcTapHoldOrder, allocator);
 
                         actionObj.AddMember("gamepadMainKey", action.gamepadMainKey, allocator);
                         actionObj.AddMember("gamepadMainAction", action.gamepadMainAction, allocator);
@@ -727,7 +1052,7 @@ namespace ActionMenuUI {
                         actionObj.AddMember("gamepadModifierKey", action.gamepadModifierKey, allocator);
                         actionObj.AddMember("gamepadModAction", action.gamepadModAction, allocator);
                         actionObj.AddMember("gamepadModTapCount", action.gamepadModTapCount, allocator);
-                        actionObj.AddMember("gamepadDelayTap", action.gamepadDelayTap, allocator);
+                        actionObj.AddMember("gamepadTapHoldOrder", action.gamepadTapHoldOrder, allocator);
 
                         actionObj.AddMember("gestureIndex", action.gestureIndex, allocator);
                         actionObj.AddMember("gamepadGestureStick", action.gamepadGestureStick, allocator);
@@ -756,8 +1081,17 @@ namespace ActionMenuUI {
             loadedInputFiles = uniqueFiles;
             SaveCacheToJson();
             SyncActionsWithEngine();
+            CaptureSavedActionList();
+            return true;
         }
-        catch (...) {}
+        catch (const std::exception& e) {
+            logger::error("[Input Manager] Error saving actions: {}", e.what());
+            return false;
+        }
+        catch (...) {
+            logger::error("[Input Manager] Unknown error saving actions.");
+            return false;
+        }
     }
 
     inline void LoadGesturesFromJson() {
@@ -992,18 +1326,6 @@ namespace ActionMenuUI {
         }
         loadedMotionFiles = uniqueFiles;
         SaveCacheToJson();
-    }
-
-    inline void ShowDelayTooltip() {
-        if (ImGuiMCP::IsItemHovered()) {
-            ImGuiMCP::SetTooltip("%s", GetLoc("action.tooltip_delay",
-                "What happens if unchecked?\n"
-                "If there is another action requiring MORE taps (e.g., Tap 2) on this same key,\n"
-                "the action with fewer taps (e.g., Tap 1) will trigger accidentally before it.\n\n"
-                "Check this option so the system waits for the tap window to close,\n"
-                "ensuring the exact number of taps is respected and preventing overlap."
-            ));
-        }
     }
 
     inline std::string ToLower(std::string s) {
@@ -2102,10 +2424,15 @@ namespace ActionMenuUI {
                 }
 
                 auto CheckComboConflict = [](
-                    int aMKey, int aMAct, int aMTap, int aModKey, int aModAct, int aModTap, int aGest,
-                    int bMKey, int bMAct, int bMTap, int bModKey, int bModAct, int bModTap, int bGest) {
+                    int aMKey, int aMAct, int aMTap, int aModKey, int aModAct, int aModTap, int aGest, int aTapHoldOrder,
+                    int bMKey, int bMAct, int bMTap, int bModKey, int bModAct, int bModTap, int bGest, int bTapHoldOrder) {
 
                         if (aMKey == 0 || bMKey == 0) return false;
+                        if (IsTapHoldPair(aMAct, aModAct) &&
+                            IsTapHoldPair(bMAct, bModAct) &&
+                            aTapHoldOrder != bTapHoldOrder) {
+                            return false;
+                        }
 
                         struct K { int key; int act; int tap; int gest; };
 
@@ -2140,8 +2467,8 @@ namespace ActionMenuUI {
 
                 // Check PC configuration
                 if (CheckComboConflict(
-                    a.pcMainKey, a.pcMainAction, a.pcMainTapCount, a.pcModifierKey, a.pcModAction, a.pcModTapCount, a.gestureIndex,
-                    b.pcMainKey, b.pcMainAction, b.pcMainTapCount, b.pcModifierKey, b.pcModAction, b.pcModTapCount, b.gestureIndex)) {
+                    a.pcMainKey, a.pcMainAction, a.pcMainTapCount, a.pcModifierKey, a.pcModAction, a.pcModTapCount, a.gestureIndex, a.pcTapHoldOrder,
+                    b.pcMainKey, b.pcMainAction, b.pcMainTapCount, b.pcModifierKey, b.pcModAction, b.pcModTapCount, b.gestureIndex, b.pcTapHoldOrder)) {
 
                     char errBuf[512];
                     snprintf(errBuf, sizeof(errBuf), GetLoc("error.conflict_pc", "PC CONFLICT: '%s' and '%s' use the exact same keys, states, and tap counts."), a.name, b.name);
@@ -2151,8 +2478,8 @@ namespace ActionMenuUI {
 
                 // Check Gamepad configuration
                 if (CheckComboConflict(
-                    a.gamepadMainKey, a.gamepadMainAction, a.gamepadMainTapCount, a.gamepadModifierKey, a.gamepadModAction, a.gamepadModTapCount, a.gestureIndex,
-                    b.gamepadMainKey, b.gamepadMainAction, b.gamepadMainTapCount, b.gamepadModifierKey, b.gamepadModAction, b.gamepadModTapCount, b.gestureIndex)) {
+                    a.gamepadMainKey, a.gamepadMainAction, a.gamepadMainTapCount, a.gamepadModifierKey, a.gamepadModAction, a.gamepadModTapCount, a.gestureIndex, a.gamepadTapHoldOrder,
+                    b.gamepadMainKey, b.gamepadMainAction, b.gamepadMainTapCount, b.gamepadModifierKey, b.gamepadModAction, b.gamepadModTapCount, b.gestureIndex, b.gamepadTapHoldOrder)) {
 
                     char errBuf[512];
                     snprintf(errBuf, sizeof(errBuf), GetLoc("error.conflict_pad", "GAMEPAD CONFLICT: '%s' and '%s' use the exact same keys, states, and tap counts."), a.name, b.name);
@@ -2190,39 +2517,6 @@ namespace ActionMenuUI {
                     }
                 }
 
-                // REGRAS 2 e 3 (Tap Delay Dinâmico Inteligente)
-                auto CheckDelay = [](int aMKey, int aMAct, int aMTap, int aModKey, int aModAct, int aModTap,
-                    int bMKey, int bMAct, int bMTap, int bModKey, int bModAct, int bModTap) {
-
-                        auto getTapInfo = [](int mK, int mAct, int mTap, int modK, int modAct, int modTap, int& outAnchor) {
-                            if (mAct == 1) { outAnchor = (modAct == 0) ? 0 : modK; return std::make_pair(mK, mTap); }
-                            if (modAct == 1) { outAnchor = mK; return std::make_pair(modK, modTap); }
-                            return std::make_pair(0, 0);
-                            };
-
-                        int aAnchor = 0, bAnchor = 0;
-                        auto aTap = getTapInfo(aMKey, aMAct, aMTap, aModKey, aModAct, aModTap, aAnchor);
-                        auto bTap = getTapInfo(bMKey, bMAct, bMTap, bModKey, bModAct, bModTap, bAnchor);
-
-                        if (aTap.first != 0 && bTap.first != 0) {
-                            // Se compartilham o mesmo botão de Tap E a mesma âncora
-                            if (aTap.first == bTap.first && aAnchor == bAnchor) {
-                                // A ação que tem a quantidade MENOR de Taps é a que precisa esperar (Delay)
-                                if (aTap.second < bTap.second) return true;
-                            }
-                        }
-                        return false;
-                    };
-
-                if (CheckDelay(a.pcMainKey, a.pcMainAction, a.pcMainTapCount, a.pcModifierKey, a.pcModAction, a.pcModTapCount,
-                    b.pcMainKey, b.pcMainAction, b.pcMainTapCount, b.pcModifierKey, b.pcModAction, b.pcModTapCount)) {
-                    a.pcDelayTap = true;
-                }
-
-                if (CheckDelay(a.gamepadMainKey, a.gamepadMainAction, a.gamepadMainTapCount, a.gamepadModifierKey, a.gamepadModAction, a.gamepadModTapCount,
-                    b.gamepadMainKey, b.gamepadMainAction, b.gamepadMainTapCount, b.gamepadModifierKey, b.gamepadModAction, b.gamepadModTapCount)) {
-                    a.gamepadDelayTap = true;
-                }
             }
         }
     }
@@ -2251,6 +2545,7 @@ namespace ActionMenuUI {
 
         std::string errorMsg;
         bool hasConflict = HasConflicts(errorMsg);
+        const bool hasUnsavedChanges = HasUnsavedActionChanges();
 
         if (hasConflict) {
             ImGuiMCP::TextColored({ 1.0f, 0.2f, 0.2f, 1.0f }, "%s", GetLoc("error.conflict_title", "[CONFIGURATION ERROR]"));
@@ -2259,10 +2554,25 @@ namespace ActionMenuUI {
             ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
         }
 
+        if (hasUnsavedChanges) {
+            ImGuiMCP::TextColored(
+                { 1.0f, 0.8f, 0.2f, 1.0f },
+                "%s",
+                GetLoc("action.unsaved_warning", "Unsaved changes. Save and apply to keep the current configuration."));
+            ImGuiMCP::Spacing();
+        }
+
         ImGuiMCP::BeginDisabled(hasConflict);
-        ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_Button, { 0.1f, 0.5f, 0.1f, 1.0f });
-        ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_ButtonHovered, { 0.2f, 0.6f, 0.2f, 1.0f });
-        ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_ButtonActive, { 0.1f, 0.4f, 0.1f, 1.0f });
+        if (hasUnsavedChanges) {
+            ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_Button, { 0.85f, 0.65f, 0.10f, 1.0f });
+            ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_ButtonHovered, { 1.0f, 0.78f, 0.18f, 1.0f });
+            ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_ButtonActive, { 0.75f, 0.52f, 0.05f, 1.0f });
+        }
+        else {
+            ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_Button, { 0.1f, 0.5f, 0.1f, 1.0f });
+            ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_ButtonHovered, { 0.2f, 0.6f, 0.2f, 1.0f });
+            ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_ButtonActive, { 0.1f, 0.4f, 0.1f, 1.0f });
+        }
 
         if (ImGuiMCP::Button(GetLoc("action.save_btn", "Save and Apply Changes"))) {
             SaveSettingsToJson();
@@ -2380,20 +2690,31 @@ namespace ActionMenuUI {
                 }
             }
 
-            ImGuiMCP::PushID(static_cast<int>(i));
+            const bool actionDirty = IsActionDirty(i);
+            ImGuiMCP::PushID(static_cast<int>(action.editorUID));
             std::string actionSummary = GetActionSummary(action);
             std::string headerWarning = hasStateWarning ? " [!]" : "";
-            std::string headerLabel = "[" + std::to_string(i) + "] " + std::string(action.name) + headerWarning + "   -   " + actionSummary + "###actionHeader_" + std::to_string(i);
+            std::string headerDirty = actionDirty ? " [*]" : "";
+            std::string headerLabel = "[" + std::to_string(i) + "] " + std::string(action.name) + headerWarning + headerDirty + "   -   " + actionSummary + "###actionHeader_" + std::to_string(action.editorUID);
 
             if (hasStateWarning) {
                 ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_Header, { 0.4f, 0.1f, 0.1f, 1.0f });
+                ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_HeaderHovered, { 0.55f, 0.15f, 0.15f, 1.0f });
+                ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_HeaderActive, { 0.65f, 0.18f, 0.18f, 1.0f });
+            }
+            else if (actionDirty) {
+                ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_Header, { 0.55f, 0.42f, 0.05f, 1.0f });
+                ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_HeaderHovered, { 0.72f, 0.56f, 0.08f, 1.0f });
+                ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_HeaderActive, { 0.85f, 0.67f, 0.12f, 1.0f });
             }
             else {
                 ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_Header, { 0.2f, 0.2f, 0.2f, 1.0f });
+                ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_HeaderHovered, { 0.28f, 0.28f, 0.28f, 1.0f });
+                ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_HeaderActive, { 0.34f, 0.34f, 0.34f, 1.0f });
             }
 
             if (ImGuiMCP::CollapsingHeader(headerLabel.c_str())) {
-                ImGuiMCP::PopStyleColor();
+                ImGuiMCP::PopStyleColor(3);
                 ImGuiMCP::Indent(); ImGuiMCP::Spacing();
 
                 if (hasStateWarning) {
@@ -2432,6 +2753,15 @@ namespace ActionMenuUI {
                 ImGuiMCP::PopStyleColor();
                 ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
 
+                if (ImGuiMCP::BeginTable(
+                    "InputPlatformColumns",
+                    2,
+                    ImGuiMCP::ImGuiTableFlags_BordersInnerV | ImGuiMCP::ImGuiTableFlags_SizingStretchSame)) {
+                    ImGuiMCP::TableSetupColumn("##PCPlatform", ImGuiMCP::ImGuiTableColumnFlags_WidthStretch);
+                    ImGuiMCP::TableSetupColumn("##GamepadPlatform", ImGuiMCP::ImGuiTableColumnFlags_WidthStretch);
+                    ImGuiMCP::TableNextRow();
+                    ImGuiMCP::TableSetColumnIndex(0);
+
                 // PC Block
                 ImGuiMCP::TextColored({ 0.5f, 0.8f, 1.0f, 1.0f }, "%s", GetLoc("action.pc_header", "Keyboard and Mouse"));
                 bool canGesturePC = (action.pcMainAction == 2 || action.pcMainAction == 4);
@@ -2461,8 +2791,9 @@ namespace ActionMenuUI {
                         ImGuiMCP::EndCombo();
                     }
                     if (action.pcMainAction == 1) {
-                        ImGuiMCP::SameLine(); ImGuiMCP::SetNextItemWidth(140.0f);
-                        ImGuiMCP::InputInt(GetLoc("action.taps", "Taps##pcMainTap"), &action.pcMainTapCount);
+                        ImGuiMCP::SetNextItemWidth(140.0f);
+                        const std::string tapsLabel = std::string(GetLoc("action.taps", "Taps")) + "##pcMainTap";
+                        ImGuiMCP::InputInt(tapsLabel.c_str(), &action.pcMainTapCount);
                         if (action.pcMainTapCount < 1) action.pcMainTapCount = 1;
                     }
                     ImGuiMCP::EndDisabled();
@@ -2510,15 +2841,24 @@ namespace ActionMenuUI {
                         ImGuiMCP::EndCombo();
                     }
                     if (action.pcModAction == 1) {
-                        ImGuiMCP::SameLine(); ImGuiMCP::SetNextItemWidth(140.0f);
-                        ImGuiMCP::InputInt(GetLoc("action.taps", "Taps##pcModTap"), &action.pcModTapCount);
+                        ImGuiMCP::SetNextItemWidth(140.0f);
+                        const std::string tapsLabel = std::string(GetLoc("action.taps", "Taps")) + "##pcModTap";
+                        ImGuiMCP::InputInt(tapsLabel.c_str(), &action.pcModTapCount);
                         if (action.pcModTapCount < 1) action.pcModTapCount = 1;
                     }
                     ImGuiMCP::EndTable();
                 }
-                ImGuiMCP::Checkbox(GetLoc("action.delay", "Delay##pcDelay"), &action.pcDelayTap);
-                ShowDelayTooltip();
-                ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
+
+                    if (IsTapHoldPair(
+                            action.pcMainAction,
+                            action.pcModAction)) {
+                        RenderTapHoldOrderSelector(
+                            action.pcTapHoldOrder,
+                            "##pcTapHoldOrder");
+                    }
+                    RenderInputBehaviorNotices(action, i, false);
+
+                    ImGuiMCP::TableSetColumnIndex(1);
 
                 // Pad Block
                 ImGuiMCP::TextColored({ 0.5f, 1.0f, 0.5f, 1.0f }, "%s", GetLoc("action.pad_header", "Gamepad"));
@@ -2549,8 +2889,9 @@ namespace ActionMenuUI {
                         ImGuiMCP::EndCombo();
                     }
                     if (action.gamepadMainAction == 1) {
-                        ImGuiMCP::SameLine(); ImGuiMCP::SetNextItemWidth(140.0f);
-                        ImGuiMCP::InputInt(GetLoc("action.taps", "Taps##padMainTap"), &action.gamepadMainTapCount);
+                        ImGuiMCP::SetNextItemWidth(140.0f);
+                        const std::string tapsLabel = std::string(GetLoc("action.taps", "Taps")) + "##padMainTap";
+                        ImGuiMCP::InputInt(tapsLabel.c_str(), &action.gamepadMainTapCount);
                         if (action.gamepadMainTapCount < 1) action.gamepadMainTapCount = 1;
                     }
                     ImGuiMCP::EndDisabled();
@@ -2598,8 +2939,9 @@ namespace ActionMenuUI {
                         ImGuiMCP::EndCombo();
                     }
                     if (action.gamepadModAction == 1) {
-                        ImGuiMCP::SameLine(); ImGuiMCP::SetNextItemWidth(140.0f);
-                        ImGuiMCP::InputInt(GetLoc("action.taps", "Taps##padModTap"), &action.gamepadModTapCount);
+                        ImGuiMCP::SetNextItemWidth(140.0f);
+                        const std::string tapsLabel = std::string(GetLoc("action.taps", "Taps")) + "##padModTap";
+                        ImGuiMCP::InputInt(tapsLabel.c_str(), &action.gamepadModTapCount);
                         if (action.gamepadModTapCount < 1) action.gamepadModTapCount = 1;
                     }
                     if (action.gamepadModAction == 3) {
@@ -2612,8 +2954,18 @@ namespace ActionMenuUI {
                     }
                     ImGuiMCP::EndTable();
                 }
-                ImGuiMCP::Checkbox(GetLoc("action.delay", "Delay##padDelay"), &action.gamepadDelayTap);
-                ShowDelayTooltip();
+
+                    if (IsTapHoldPair(
+                            action.gamepadMainAction,
+                            action.gamepadModAction)) {
+                        RenderTapHoldOrderSelector(
+                            action.gamepadTapHoldOrder,
+                            "##padTapHoldOrder");
+                    }
+                    RenderInputBehaviorNotices(action, i, true);
+
+                    ImGuiMCP::EndTable();
+                }
                 ImGuiMCP::Spacing(); ImGuiMCP::Separator(); ImGuiMCP::Spacing();
 
                 ImGuiMCP::TextColored({ 0.8f, 0.8f, 0.5f, 1.0f }, "%s", GetLoc("action.response_timings", "Response Timings"));
@@ -2677,7 +3029,7 @@ namespace ActionMenuUI {
 
                 ImGuiMCP::Unindent(); ImGuiMCP::Spacing();
             }
-            else ImGuiMCP::PopStyleColor();
+            else ImGuiMCP::PopStyleColor(3);
             ImGuiMCP::PopID();
         }
     }

@@ -5,7 +5,7 @@ namespace InputManagerAPI {
 
     constexpr uint32_t kMessage_UpdateListener = 8080;
     // Apenas declaramos a classe e funções aqui (a lógica vai para o .cpp)
-    class InputManagerAPI_Impl : public IInputManager {
+    class InputManagerAPI_Impl : public IInputManagerV2 {
     public:
         static InputManagerAPI_Impl* GetSingleton();
 
@@ -19,6 +19,10 @@ namespace InputManagerAPI {
 
         ActionInfo GetActionInfo(int actionID) override;
         bool UpdateActionMapping(int actionID, const ActionInfo& newMapping) override;
+        uint32_t GetAPIVersion() const override;
+        ActionUpdateResultV2 UpdateActionMappingV2(
+            int actionID,
+            const ActionInfo& newMapping) override;
         MotionInfo GetMotionInfo(int motionID) override;
         bool UpdateMotionMapping(int motionID, const MotionInfo& newMapping) override;
     };
