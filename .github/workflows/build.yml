@@ -16,10 +16,10 @@ jobs:
 
       - name: Bootstrap vcpkg
         shell: cmd
-        run: ./extern/vcpkg/bootstrap-vcpkg.bat
+        run: .\extern\vcpkg\bootstrap-vcpkg.bat
 
       - name: Install dependencies
-        run: ./extern/vcpkg/vcpkg install --triplet x64-windows
+        run: .\extern\vcpkg\vcpkg install --triplet x64-windows
 
       - name: Configure
         run: >
