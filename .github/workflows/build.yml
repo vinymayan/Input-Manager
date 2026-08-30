@@ -15,6 +15,7 @@ jobs:
           submodules: recursive
 
       - name: Bootstrap vcpkg
+        shell: cmd
         run: ./extern/vcpkg/bootstrap-vcpkg.bat
 
       - name: Install dependencies
