@@ -26,7 +26,9 @@ jobs:
         run: .\extern\src\vcpkg\bootstrap-vcpkg.bat
 
       - name: Install dependencies
-        run: .\extern\src\vcpkg\vcpkg install --triplet x64-windows
+        run: .\extern\src\vcpkg\vcpkg install
+          --triplet x64-windows
+          --overlay-ports=.\cmake\ports
 
       - name: Configure
         run: >
