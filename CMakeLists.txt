@@ -18,6 +18,13 @@ cmake_minimum_required(VERSION 3.21)
 # Set your project name. This will be the name of your SKSE .dll file.
 set(AUTHOR_NAME "Viny")
 set(PRODUCT_NAME "InputManager")
+if(WIN32)
+    add_compile_definitions(
+        NOMINMAX
+        UNICODE
+        _UNICODE
+    )
+endif()
 project(${PRODUCT_NAME} VERSION 0.1.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
