@@ -1,6 +1,11 @@
 
 if(NOT DEFINED ENV{COMMONLIB_SSE_FOLDER})
-  message(FATAL_ERROR "Missing COMMONLIB_SSE_FOLDER environment variable")
+  message(WARNING "Missing COMMONLIB_SSE_FOLDER environment variable - using default")
+  set(ENV{COMMONLIB_SSE_FOLDER} "extern/src/CommonLibSSE-NG")
+endif()
+
+if(NOT DEFINED ENV{VCPKG_ROOT})
+  set(ENV{VCPKG_ROOT} "extern/src/vcpkg")
 endif()
 
 include(cmake/lib/copyOutputs.cmake)

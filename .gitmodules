@@ -1,3 +1,6 @@
 [submodule "extern/src/CommonLibSSE-NG"]
 	path = extern/src/CommonLibSSE-NG
 	url = https://github.com/alandtse/CommonLibSSE-NG.git
+[submodule "extern/src/vcpkg"]
+	path = extern/src/vcpkg
+	url = https://github.com/microsoft/vcpkg
