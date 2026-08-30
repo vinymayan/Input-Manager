@@ -30,7 +30,7 @@ jobs:
           --parallel
           --verbose
           
-     - name: Assemble install directory
+      - name: Assemble install directory
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
