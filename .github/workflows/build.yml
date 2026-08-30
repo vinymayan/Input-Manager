@@ -14,11 +14,19 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Bootstrap vcpkg
+        run: ./extern/vcpkg/bootstrap-vcpkg.sh
+
+      - name: Install dependencies
+        run: ./extern/vcpkg/vcpkg install --triplet x64-windows
+
       - name: Configure
         run: >
           cmake
           -S .
           -B build
+          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/extern/vcpkg/scripts/buildsystems/vcpkg.cmake
+          -DVCPKG_TARGET_TRIPLET=x64-windows
           -G "Visual Studio 17 2022"
           -A x64
 
