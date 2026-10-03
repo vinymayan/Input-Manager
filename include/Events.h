@@ -79,7 +79,7 @@ namespace PluginLogic {
 
         void RegisterSink();
         void RegisterAction(const std::string& name, ComboKey combo, std::function<void()> callback, std::function<void()> releaseCallback = nullptr);
-        bool ProcessCoreLogic(RE::InputEvent* a_event);
+        bool ProcessCoreLogic(RE::InputEvent* a_event, bool singleEvent = false);
         bool ProcessInput(RE::InputEvent* a_event);
         RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* a_event, RE::BSTEventSource<RE::InputEvent*>* a_source) override;
 
@@ -104,6 +104,7 @@ namespace PluginLogic {
         std::vector<uint32_t> GetRecordedMotion() const { return _tempMotionSequence; }
 
         void StartMotionTesting(int motionIndex, bool isGamepad);
+        void UpdateMotionTest();
         bool GetMotionTestSuccess() const { return _motionTestSuccess; }
         std::vector<uint32_t> GetMotionTestInputs() const { return _tempMotionTestSequence; }
         void ResetMotionTest() { _motionTestSuccess = false; _testingMotionIndex = -1; _tempMotionTestSequence.clear(); }

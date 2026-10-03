@@ -1901,6 +1901,8 @@ namespace ActionMenuUI {
                     }
                 }
                 else if (m_state == M_TESTING || m_state == M_TEST_DONE) {
+                    // Use the same timer and terminal result as input processing.
+                    keyMgr->UpdateMotionTest();
                     const auto testInputs = keyMgr->GetMotionTestInputs();
                     bool correctPrefix = testInputs.size() <= expectedSequence.size();
                     for (size_t i = 0; correctPrefix && i < testInputs.size(); ++i) {
@@ -1925,7 +1927,7 @@ namespace ActionMenuUI {
                         const float prog = std::min(elapsed / maxT, 1.0f);
                         char buf[32]; snprintf(buf, sizeof(buf), "%.1f / %.1fs", elapsed, maxT);
                         ImGuiMCP::ProgressBar(prog, { 588.0f, 0.0f }, buf);
-                        if (keyMgr->GetMotionTestSuccess() || !keyMgr->IsTestingMotion() || elapsed >= maxT) m_state = M_TEST_DONE;
+                        if (!keyMgr->IsTestingMotion()) m_state = M_TEST_DONE;
                     }
                     else if (keyMgr->GetMotionTestSuccess()) {
                         ImGuiMCP::TextColored({ 0.2f, 1.0f, 0.2f, 1.0f }, "%s", GetLoc("motion.success", "SUCCESS! Motion executed correctly!"));

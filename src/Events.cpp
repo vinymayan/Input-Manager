@@ -1,6 +1,7 @@
 ﻿#include "Events.h"
 #include "logger.h" 
 #include "Settings.h"
+#include "MotionTest.h"
 #include <optional>
 #include <ranges>
 
@@ -883,7 +884,7 @@ namespace PluginLogic {
         }
     }
 
-    bool KeyManager::ProcessCoreLogic(RE::InputEvent* a_event) {
+    bool KeyManager::ProcessCoreLogic(RE::InputEvent* a_event, bool singleEvent) {
         bool consumed = false;
         auto now = std::chrono::steady_clock::now();
 
@@ -899,15 +900,10 @@ namespace PluginLogic {
                 _isRecordingMotion = false;
             }
         }
-        if (_testingMotionIndex >= 0) {
-            float maxTime = ActionMenuUI::motionList[_testingMotionIndex].timeWindow;
-            if (std::chrono::duration<float>(now - _recordingStartTime).count() > maxTime) {
-                _testingMotionIndex = -1;
-            }
-        }
+        UpdateMotionTest();
 
         // Percorre a Linked List de eventos de entrada desse exato frame
-        for (auto* e = a_event; e != nullptr; e = e->next) {
+        for (auto* e = a_event; e != nullptr; e = singleEvent ? nullptr : e->next) {
 
             bool newUp = _dirUp, newDown = _dirDown, newLeft = _dirLeft, newRight = _dirRight;
             bool dirChanged = false;
@@ -1017,6 +1013,13 @@ namespace PluginLogic {
                     if (_tempMotionTestSequence.size() < 20) {
                         _tempMotionTestSequence.push_back(eventToLog);
                     }
+                    // Validate only the selected motion; gameplay matches may
+                    // consume shorter or identical sequences from the history.
+                    UpdateMotionTest();
+                    continue;
+                }
+                if (_testingMotionIndex >= 0) {
+                    continue;
                 }
 
                 _inputHistory.push_back({ eventToLog, now });
@@ -1033,9 +1036,7 @@ namespace PluginLogic {
                 InputManagerAPI::SendMotionInputUpdatedEvent(eventToLog, partialPayload);
 
                 if (_isRecordingMotion && (isGamepadEvent == _isRecordingGamepad)) {
-                    if (_tempMotionSequence.empty() || _tempMotionSequence.back() != eventToLog) {
-                        _tempMotionSequence.push_back(eventToLog);
-                    }
+                    _tempMotionSequence.push_back(eventToLog);
                 }
                 else if (!_isRecordingMotion) {
                     CheckMotionMatches(now);
@@ -1279,7 +1280,8 @@ namespace PluginLogic {
             return false;
         }
 
-        ProcessCoreLogic(a_event);
+        // InputEventHandler calls us once per node; the Sink supplies the list.
+        ProcessCoreLogic(a_event, true);
 
         if (forceHook) return true;
 
@@ -1517,10 +1519,6 @@ namespace PluginLogic {
             const auto& motionEntry = ActionMenuUI::motionList[m];
 
             for (int pass = 0; pass < 2; ++pass) {
-                if (_testingMotionIndex >= 0 && ((pass == 1) != _isRecordingGamepad)) {
-                    continue;
-                }
-
                 const auto& requiredSeq = (pass == 0) ? motionEntry.pcSequence : motionEntry.padSequence;
 
                 if (requiredSeq.empty()) continue;
@@ -1542,12 +1540,7 @@ namespace PluginLogic {
                 // Verifica se o jogador executou dentro da janela permitida
                 if (timeTaken <= motionEntry.timeWindow) {
 
-                    if (_testingMotionIndex == static_cast<int>(m)) {
-                        // Sucesso no Teste!
-                        _motionTestSuccess = true;
-                        _testingMotionIndex = -1;
-                    }
-                    else if (_testingMotionIndex == -1 && !_isRecordingMotion) {
+                    if (!_isRecordingMotion) {
                         if (ActionMenuUI::showDebugLogs) {
                             std::string msg = "Motion triggered: " + std::string(motionEntry.name);
                             logger::info("[SUCCESS] {}", msg);
@@ -1572,6 +1565,27 @@ namespace PluginLogic {
         _tempMotionTestSequence.clear();
         _inputHistory.clear();
         _recordingStartTime = std::chrono::steady_clock::now();
+    }
+
+    void KeyManager::UpdateMotionTest() {
+        if (_testingMotionIndex < 0) return;
+        if (static_cast<std::size_t>(_testingMotionIndex) >=
+            ActionMenuUI::motionList.size()) {
+            _testingMotionIndex = -1;
+            return;
+        }
+
+        const auto& motion = ActionMenuUI::motionList[_testingMotionIndex];
+        const auto& expected = _isRecordingGamepad ?
+            motion.padSequence : motion.pcSequence;
+        const float elapsed = std::chrono::duration<float>(
+            Clock::now() - _recordingStartTime).count();
+        const auto result = EvaluateMotionTest(
+            _tempMotionTestSequence, expected, elapsed, motion.timeWindow);
+        if (result != MotionTestResult::kPending) {
+            _motionTestSuccess = result == MotionTestResult::kSuccess;
+            _testingMotionIndex = -1;
+        }
     }
 
     void KeyManager::RegisterSink() {
