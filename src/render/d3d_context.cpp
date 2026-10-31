@@ -135,10 +135,10 @@ void Render::InstallHooks()
 		return;
 	}
 
+	gameContext.device->GetImmediateContext(gameContext.context.put());
+
 	REL::Relocation<std::uintptr_t> D3DVtbl{ *(uintptr_t*)gameContext.swapChain };
 	fnPresentOrig = D3DVtbl.write_vfunc(0x8, Render::Present);
-
-	gameContext.device->GetImmediateContext(gameContext.context.put());
 	initialized = true;
 }
 
